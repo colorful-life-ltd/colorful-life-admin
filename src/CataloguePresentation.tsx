@@ -58,8 +58,11 @@ function CataloguePresentation({ refreshToken = 0, refreshCategory = null }: Cat
   useEffect(() => {
     let current = true
     const scope: AvailabilityScope = selectedCategoryId ?? 'all'
-    setAvailability(null)
-    setAvailabilityError(null)
+    void Promise.resolve().then(() => {
+      if (!current) return
+      setAvailability(null)
+      setAvailabilityError(null)
+    })
     const request = selectedCategoryId === null
       ? adminProducts.getProductAvailability()
       : adminCategories.getProductAvailability(selectedCategoryId)

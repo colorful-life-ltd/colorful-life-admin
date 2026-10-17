@@ -20,7 +20,7 @@ if (!preloadSource.includes("contextBridge.exposeInMainWorld('adminAuth'")) {
 if (preloadSource.includes("exposeInMainWorld('electron'") || preloadSource.includes("exposeInMainWorld('ipcRenderer'")) {
   throw new Error('The preload must not expose raw Electron objects.')
 }
-if (JSON.stringify(channels) !== JSON.stringify(['admin-auth:login', 'admin-auth:restore', 'admin-auth:renew', 'admin-auth:logout', 'admin-window:maximize', 'admin-products:create', 'admin-products:list', 'admin-products:list-admin-product-listings', 'admin-products:product-availability', 'admin-products:update-metadata', 'admin-products:list-product-images', 'admin-products:upload-image', 'admin-products:reorder-product-images', 'admin-products:update-product-image-alt-text', 'admin-products:delete-product-image', 'admin-products:set-feature', 'admin-products:upload-catalogue-artwork', 'admin-products:remove-catalogue-artwork', 'admin-products:lookup-lego-products', 'admin-products:create-used-offer', 'admin-categories:list', 'admin-categories:product-availability', 'admin-categories:create', 'admin-categories:update', 'admin-categories:upload-artwork', 'admin-categories:remove-artwork', 'admin-categories:upload-thumbnail-artwork', 'admin-categories:remove-thumbnail-artwork', 'admin-purchases:manual-supplier-options', 'admin-purchases:create-manual', 'admin-purchases:review', 'admin-purchases:amend', 'admin-purchases:resolve', 'admin-purchases:set-inventory-disposition', 'admin-purchases:receive', 'admin-purchases:search-products', 'admin-purchases:create-listing', 'admin-purchases:import-pdf', 'admin-purchases:list', 'admin-purchases:get', 'admin-purchases:analytics-summary', 'admin-purchases:supplier-monthly-analytics'])) {
+if (JSON.stringify(channels) !== JSON.stringify(['admin-auth:login', 'admin-auth:restore', 'admin-auth:renew', 'admin-auth:logout', 'admin-window:maximize', 'admin-products:create', 'admin-products:list', 'admin-products:list-admin-product-listings', 'admin-products:product-availability', 'admin-products:update-metadata', 'admin-products:list-product-images', 'admin-products:upload-image', 'admin-products:reorder-product-images', 'admin-products:update-product-image-alt-text', 'admin-products:delete-product-image', 'admin-products:set-feature', 'admin-products:upload-catalogue-artwork', 'admin-products:remove-catalogue-artwork', 'admin-products:lookup-lego-products', 'admin-products:create-used-offer', 'admin-categories:list', 'admin-categories:product-availability', 'admin-categories:create', 'admin-categories:update', 'admin-categories:upload-artwork', 'admin-categories:remove-artwork', 'admin-categories:upload-thumbnail-artwork', 'admin-categories:remove-thumbnail-artwork', 'admin-purchases:manual-supplier-options', 'admin-purchases:create-manual', 'admin-purchases:review', 'admin-purchases:amend', 'admin-purchases:resolve', 'admin-purchases:set-inventory-disposition', 'admin-purchases:receive', 'admin-purchases:search-products', 'admin-purchases:create-listing', 'admin-purchases:import-pdf', 'admin-purchases:list', 'admin-purchases:get', 'admin-purchases:analytics-summary', 'admin-purchases:supplier-monthly-analytics', 'admin-orders:list', 'admin-orders:get', 'admin-orders:preparing', 'admin-orders:dispatch', 'admin-orders:cancel'])) {
   throw new Error(`Unexpected exposed IPC channels: ${channels.join(', ')}`)
 }
 if (!mainSource.includes('contextIsolation: true') || !mainSource.includes('nodeIntegration: false')) {
@@ -106,3 +106,17 @@ if (!mainSource.includes('serializeIpcError') || !preloadSource.includes('forwar
 }
 
 console.log('Verified the narrow Electron authentication boundary.')
+
+const orderIpcSource = readFileSync(resolve('dist-electron', 'order-ipc.js'), 'utf8')
+const orderServiceSource = readFileSync(resolve('dist-electron', 'order-service.js'), 'utf8')
+if (!builtPreloadSource.includes("exposeInMainWorld('adminOrders'") || !builtMainSource.includes('registerOrderIpc(handleIpc, new OrderService(authService))')) {
+  throw new Error('The compiled order bridge must use the authenticated order service.')
+}
+for (const operation of ['list', 'get', 'preparing', 'dispatch', 'cancel']) {
+  if (!builtPreloadSource.includes(`admin-orders:${operation}`) || !orderIpcSource.includes(`admin-orders:${operation}`)) {
+    throw new Error(`Missing compiled order IPC operation: ${operation}`)
+  }
+}
+if (!orderServiceSource.includes('/fulfilment/dispatch') || !orderServiceSource.includes('/seller-cancel')) {
+  throw new Error('The compiled order service must use the supported fulfilment and seller cancellation APIs.')
+}

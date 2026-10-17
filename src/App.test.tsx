@@ -126,6 +126,22 @@ describe('App authentication flow', () => {
     expect(screen.getByLabelText('Set number or product title')).toBeInTheDocument()
   })
 
+  it('keeps Orders behind authentication and opens the order section for an Admin', async () => {
+    window.adminOrders = { list: vi.fn().mockResolvedValue({ items: [], pagination: { page: 1, pageSize: 20, totalItems: 0, totalPages: 0 } }), get: vi.fn(), preparing: vi.fn(), dispatch: vi.fn(), cancel: vi.fn() }
+    render(<App />)
+    await screen.findByRole('button', { name: 'Sign in' })
+    expect(screen.queryByRole('button', { name: 'Orders' })).not.toBeInTheDocument()
+    expect(window.adminOrders.list).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'admin@example.com' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Orders' }))
+    expect(await screen.findByText('No orders found.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Edit products' })).toHaveClass('button-secondary')
+    expect(screen.getByRole('button', { name: 'Orders' })).toHaveClass('button-primary')
+    expect(window.adminOrders.list).toHaveBeenCalledWith(1, 20)
+  })
+
   it('returns to Login immediately while backend logout revocation is pending', async () => {
     window.adminAuth.restore = vi.fn().mockResolvedValue(adminSession)
     let finishLogout: () => void = () => undefined

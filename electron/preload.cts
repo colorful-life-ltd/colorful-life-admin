@@ -1,3 +1,4 @@
+import type { AdminOrdersApi } from './order-contract.js'
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import type { AdminAuthApi, AdminSessionEndedNotice } from './auth-contract.js'
@@ -86,3 +87,12 @@ const adminPurchases: AdminPurchasesApi = {
 }
 
 contextBridge.exposeInMainWorld('adminPurchases', adminPurchases)
+
+const adminOrders: AdminOrdersApi = {
+  list: (page, pageSize) => forwardIpcResult(ipcRenderer.invoke('admin-orders:list', page, pageSize)),
+  get: (id) => forwardIpcResult(ipcRenderer.invoke('admin-orders:get', id)),
+  preparing: (id) => forwardIpcResult(ipcRenderer.invoke('admin-orders:preparing', id)),
+  dispatch: (id, input) => forwardIpcResult(ipcRenderer.invoke('admin-orders:dispatch', id, input)),
+  cancel: (id, reason) => forwardIpcResult(ipcRenderer.invoke('admin-orders:cancel', id, reason)),
+}
+contextBridge.exposeInMainWorld('adminOrders', adminOrders)
