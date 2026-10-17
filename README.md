@@ -4,6 +4,18 @@
 
 Run `npm run dev` to start Vite, compile Electron TypeScript in watch mode, wait for both resources, and open the Electron window.
 
+### Electron security configuration
+
+`COLORFUL_LIFE_BACKEND_URL` defaults to `http://localhost:3000`. Non-loopback endpoints require HTTPS; explicit HTTPS ports and API base paths are supported (for example, `https://api.example.com:8443/api`). HTTP is permitted only for literal `localhost`, `127.0.0.1`, or `[::1]`. Credentials, whitespace, query strings, fragments, unsupported schemes and malformed URLs fail startup without logging the supplied value. Backend redirects are rejected: configure the canonical endpoint directly.
+
+Packaged applications always load their bundled `dist/index.html` and reject `ELECTRON_RENDERER_URL`. Unpackaged development may use a loopback server origin; the standard Vite server runs at `http://127.0.0.1:5173` with a strict port. Runtime checks can also name the exact compiled entry file. The privileged window permits only its entry document and fragment navigation. Other navigation, redirects, subframes and webviews are blocked. Existing allowlisted carrier tracking links open in the system browser.
+
+Every IPC handler checks the current BrowserWindow, WebContents, main-frame identity and renderer document URL before executing. Rejected calls use the structured error envelope with status `403` and Backend code `FORBIDDEN`. Authentication tokens remain in Main Process memory; the renderer receives session views and typed operation results.
+
+Vite injects the CSP into both development and production HTML. Production permits bundled scripts/styles, Cloudinary images (`https://res.cloudinary.com`), and local image previews; renderer network API calls and embedded frames are blocked. Development additionally permits the local Vite HTTP/WebSocket connection and injected styles, with hashes for the React refresh preamble instead of unrestricted inline scripts. These controls follow [Electron's security guidance](https://www.electronjs.org/docs/latest/tutorial/security).
+
+`npm test` runs unit tests, production builds, boundary checks, the existing purchase/order Electron runtimes, and security runtimes for both compiled-file and Vite development renderers. Security runtimes use local HTTP fixtures and intercept Cloudinary requests before network access; they require a graphical Electron environment and port 5173 to be available. They do not contact a real Backend or database.
+
 ## Catalogue presentation management
 
 After signing in, the Presentation management panel loads active listings from `GET /products` and uses listing IDs for all presentation actions. The backend `isFeatureProduct` value is the only source of Feature/Standard state. `PATCH /products/:id/feature` is atomic and category-scoped; the Admin refreshes the catalogue after it succeeds. The backend does not expose a Feature-clear operation, so the Admin only offers selecting or changing a Feature listing.

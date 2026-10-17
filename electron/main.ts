@@ -11,13 +11,14 @@ import { CategoryError, CategoryService, validateCategoryCreate } from './catego
 import { PurchaseError, PurchaseService, validateAmendment, validateReceipt, validateResolution, validateInventoryDisposition, validateListingCreation } from './purchase-service.js'
 import type { ManualPurchaseInput } from './purchase-contract.js'
 import { handleEditContextMenu } from './edit-context-menu.js'
-import { serializeIpcError } from './ipc-error-contract.js'
+import { guardRendererNavigation, secureIpcHandler, trustedRendererUrl } from './renderer-security.js'
+import { validateBackendUrl } from './backend-url.js'
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url))
-const rendererUrl = process.env.ELECTRON_RENDERER_URL
-const backendUrl = process.env.COLORFUL_LIFE_BACKEND_URL ?? 'http://localhost:3000'
+const rendererUrl = trustedRendererUrl(join(app.getAppPath(), 'dist', 'index.html'), process.env.ELECTRON_RENDERER_URL, app.isPackaged)
+const backendUrl = validateBackendUrl(process.env.COLORFUL_LIFE_BACKEND_URL ?? 'http://localhost:3000')
 let mainWindow: BrowserWindow | null = null
-const authService = new AuthService(backendUrl, (input, init) => fetch(input, init), (notice) => {
+const authService = new AuthService(backendUrl, (input, init) => fetch(input, { ...init, redirect: 'error' }), (notice) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('admin-auth:session-ended', notice)
 }, (accessTokenExpiresAt) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('admin-auth:session-renewed', accessTokenExpiresAt)
@@ -30,13 +31,7 @@ const handleIpc = <Arguments extends unknown[], Result>(
   channel: string,
   handler: (event: IpcMainInvokeEvent, ...args: Arguments) => Result | Promise<Result>,
 ): void => {
-  ipcMain.handle(channel, async (event, ...args: Arguments) => {
-    try {
-      return await handler(event, ...args)
-    } catch (error) {
-      return serializeIpcError(error)
-    }
-  })
+  ipcMain.handle(channel, secureIpcHandler(() => mainWindow, rendererUrl, handler))
 }
 
 registerOrderIpc(handleIpc, new OrderService(authService))
@@ -188,9 +183,12 @@ const createWindow = (): void => {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      webviewTag: false,
       preload: join(currentDirectory, 'preload.cjs'),
     },
   })
+  guardRendererNavigation(window, rendererUrl)
   window.webContents.setWindowOpenHandler(({ url }) => {
     const trackingUrl = safeTrackingUrl(url)
     if (trackingUrl) void shell.openExternal(trackingUrl).catch(() => undefined)
@@ -207,12 +205,7 @@ const createWindow = (): void => {
     })
   })
 
-  if (rendererUrl) {
-    void window.loadURL(rendererUrl)
-    return
-  }
-
-  void window.loadFile(join(app.getAppPath(), 'dist', 'index.html'))
+  void window.loadURL(rendererUrl)
 }
 
 app.whenReady().then(() => {
