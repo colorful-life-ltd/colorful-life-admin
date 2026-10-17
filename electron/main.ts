@@ -1,4 +1,7 @@
-import { app, BrowserWindow, ipcMain, Menu, type IpcMainInvokeEvent } from 'electron'
+import { safeTrackingUrl } from './tracking-url.js'
+import { OrderService } from './order-service.js'
+import { registerOrderIpc } from './order-ipc.js'
+import { shell, app, BrowserWindow, ipcMain, Menu, type IpcMainInvokeEvent } from 'electron'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { AuthError, AuthService } from './auth-service.js'
@@ -35,6 +38,8 @@ const handleIpc = <Arguments extends unknown[], Result>(
     }
   })
 }
+
+registerOrderIpc(handleIpc, new OrderService(authService))
 
 const isLoginCredentials = (value: unknown): value is LoginCredentials =>
   typeof value === 'object' &&
@@ -185,6 +190,11 @@ const createWindow = (): void => {
       nodeIntegration: false,
       preload: join(currentDirectory, 'preload.cjs'),
     },
+  })
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    const trackingUrl = safeTrackingUrl(url)
+    if (trackingUrl) void shell.openExternal(trackingUrl).catch(() => undefined)
+    return { action: 'deny' }
   })
   mainWindow = window
   window.on('closed', () => {

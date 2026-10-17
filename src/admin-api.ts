@@ -29,3 +29,5 @@ export const adminAuth = errorAwareBridge(() => window.adminAuth)
 export const adminProducts = errorAwareBridge(() => window.adminProducts)
 export const adminCategories = errorAwareBridge(() => window.adminCategories)
 export const adminPurchases = errorAwareBridge(() => window.adminPurchases)
+
+export const adminOrders = errorAwareBridge(() => window.adminOrders)
