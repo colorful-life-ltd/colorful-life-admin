@@ -120,11 +120,14 @@ cannot write or submit inventory until the owning process exits.
 
 After a timeout, lost response, malformed success or interrupted process, the saved
 shipment remains locked and must be retried with its original key, using the same
-Admin account. A later rejection cannot erase an earlier uncertain outcome. A Backend
+Admin account. Only the Backend-confirmed post-idempotency responses 409 INSUFFICIENT_AVAILABLE_STOCK,
+409 USED_OFFER_NOT_SUPPORTED or 404 LISTING_NOT_FOUND conclusively reject even a
+previously uncertain shipment, allowing explicit discard. Other responses (including
+400, 401, 403, 5xx and IDEMPOTENCY_CONFLICT) do not resolve prior uncertainty. A Backend
 idempotency conflict requires ledger investigation; no automatic new-key fallback
 exists. A confirmed result/replay permits an explicit “Start another physical shipment”
-action. A definitively rejected first request or an unsent prepared shipment can be
-explicitly discarded. Do not delete an uncertain journal or record those goods under
+action. A conclusively rejected retry, a definitively rejected first request, or an unsent
+prepared shipment can be explicitly discarded. Do not delete an uncertain journal or record those goods under
 a new key. Unreadable/unwritable journals fail closed and require recovery before new
 submissions. Files may contain business shipment notes and should be preserved when
 moving an Electron profile to another machine.
@@ -139,3 +142,11 @@ launcher for writes. `npm run test:inventory-runtime` exercises the compiled Ele
 UI and a disposable HTTP fixture, including a committed shipment with a lost response,
 retry across navigation, audit retrieval and exactly one deduction. It is included in
 `npm test`; the existing security runtime also verifies the seven new IPC channels.
+
+Shipment journals use same-directory temporary files, file fsync before atomic rename,
+and directory fsync where supported. Discard writes a flushed null tombstone instead
+of unlinking the journal. Windows may not permit directory handles/fsync; only known
+unsupported-operation errors are tolerated there. Other I/O failures fail closed.
+These measures improve crash consistency but cannot guarantee durability on every
+filesystem, storage device or power-loss scenario. Preserve profiles and investigate
+corrupt journals before recording the same goods again.

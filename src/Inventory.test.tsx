@@ -32,6 +32,9 @@ it('shows current/reserved/available quantities and existing stock semantics wit
 it('shows signed movement quantities, actor, timestamp, note and FBA metadata', async () => {
   render(<Inventory />); await select()
   expect(await screen.findByText('FBA OUTBOUND')).toBeInTheDocument()
+  const selectedButton = screen.getByRole('button', { name: 'View listing #4' })
+  expect(selectedButton).toHaveAttribute('aria-pressed', 'true')
+  expect(selectedButton.closest('tr')).not.toHaveAttribute('aria-selected')
   expect(screen.getByText('-2')).toBeInTheDocument(); expect(screen.getByText('User #1')).toBeInTheDocument(); expect(screen.getByText('Home stock')).toBeInTheDocument(); expect(screen.getByText('FBA-123')).toBeInTheDocument()
   expect(document.querySelector('time')).toHaveAttribute('dateTime', '2026-10-18T12:00:00Z')
   expect(screen.getByText(/not reconstructed/)).toBeInTheDocument()

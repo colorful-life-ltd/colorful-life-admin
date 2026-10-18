@@ -57,11 +57,11 @@ describe('inventory service and persistent retry journal', () => {
     await expect(f.service.submit(saved.request.idempotencyKey)).rejects.toMatchObject({ status, code: 'api' })
     expect((await f.service.pending())?.request).toEqual(saved.request)
   })
-  it('does not discard an uncertain shipment even if a later retry is rejected', async () => {
+  it('does not discard an uncertain shipment after a later authorization rejection', async () => {
     const f = fixture(); const saved = await prepare(f)
-    f.authenticatedFetch.mockRejectedValueOnce(new Error('lost')).mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'INSUFFICIENT_AVAILABLE_STOCK', message: 'No stock' } }), { status: 409 }))
+    f.authenticatedFetch.mockRejectedValueOnce(new Error('lost')).mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'FORBIDDEN', message: 'Forbidden' } }), { status: 403 }))
     await expect(f.service.submit(saved.request.idempotencyKey)).rejects.toThrow()
-    await expect(f.service.submit(saved.request.idempotencyKey)).rejects.toThrow('Not enough available')
+    await expect(f.service.submit(saved.request.idempotencyKey)).rejects.toThrow('cannot manage inventory')
     expect((await f.service.pending())?.state).toBe('uncertain')
     await expect(f.service.finish(saved.request.idempotencyKey)).rejects.toThrow('cannot be discarded')
   })
@@ -169,4 +169,24 @@ it('blocks a second process writer before changing the journal or sending a ship
   await expect(second.submit(saved.request.idempotencyKey)).rejects.toMatchObject({ code: 'busy' })
   expect((await f.service.pending())?.state).toBe('prepared')
   expect(f.authenticatedFetch).not.toHaveBeenCalled()
+})
+it.each([
+  [409, 'INSUFFICIENT_AVAILABLE_STOCK'], [409, 'USED_OFFER_NOT_SUPPORTED'], [404, 'LISTING_NOT_FOUND'],
+])('conclusively rejects an uncertain shipment after HTTP %s / %s and permits explicit discard', async (status, code) => {
+  const f = fixture(); const saved = await prepare(f)
+  f.authenticatedFetch.mockRejectedValueOnce(new TypeError('never reached Backend')).mockResolvedValueOnce(new Response(JSON.stringify({ error: { code, message: 'Rejected after replay lookup' } }), { status }))
+  await expect(f.service.submit(saved.request.idempotencyKey)).rejects.toThrow()
+  await expect(f.service.submit(saved.request.idempotencyKey)).rejects.toMatchObject({ status, backendCode: code })
+  expect((await f.service.pending())?.state).toBe('rejected')
+  await f.service.finish(saved.request.idempotencyKey); expect(await f.service.pending()).toBeNull()
+  expect((await prepare(f)).request.idempotencyKey).not.toBe(saved.request.idempotencyKey)
+})
+it.each([[400, 'VALIDATION_ERROR'], [401, 'AUTH_REQUIRED'], [403, 'FORBIDDEN'], [500, 'INTERNAL_SERVER_ERROR'], [409, 'IDEMPOTENCY_CONFLICT'], [409, 'UNKNOWN'], [404, 'NOT_FOUND'], [403, 'LISTING_NOT_FOUND']])('does not resolve uncertainty with HTTP %s / %s', async (status, code) => {
+  const f = fixture(); const saved = await prepare(f)
+  f.authenticatedFetch.mockRejectedValueOnce(new Error('lost')).mockResolvedValueOnce(new Response(JSON.stringify({ error: { code, message: 'Unresolved' } }), { status }))
+  await expect(f.service.submit(saved.request.idempotencyKey)).rejects.toThrow()
+  await expect(f.service.submit(saved.request.idempotencyKey)).rejects.toThrow()
+  expect((await f.service.pending())?.state).toBe('uncertain')
+  await expect(f.service.finish(saved.request.idempotencyKey)).rejects.toThrow()
+  await expect(f.service.prepare({ ...input, quantity: 3 })).rejects.toThrow()
 })

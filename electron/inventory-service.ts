@@ -132,7 +132,9 @@ export class InventoryService implements AdminInventoryApi {
     if (!response.ok) {
       const error = await this.apiError(response)
       const definite = [400, 403, 404, 409].includes(response.status) && error.backendCode !== 'IDEMPOTENCY_CONFLICT'
-      if (current.state !== 'uncertain' && definite) this.write(scope, { request: current.request, state: 'rejected' })
+      // Backend checks persistent idempotency before these exact status/code pairs.
+      const conclusive = (response.status === 409 && ['INSUFFICIENT_AVAILABLE_STOCK', 'USED_OFFER_NOT_SUPPORTED'].includes(error.backendCode ?? '')) || (response.status === 404 && error.backendCode === 'LISTING_NOT_FOUND')
+      if (conclusive || (current.state !== 'uncertain' && definite)) this.write(scope, { request: current.request, state: 'rejected' })
       throw error
     }
     const value: unknown = await response.json().catch(() => { throw malformed() })
