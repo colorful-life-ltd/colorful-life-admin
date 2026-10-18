@@ -11,3 +11,7 @@ export const order: OrderDetail = {
   fulfilment: { stage: 'CONFIRMED', preparingAt: null, dispatchedAt: null, shipments: [] }, fulfilmentEvents: [],
 }
 export const orderPage: OrderPage = { items: [order], pagination: { page: 1, pageSize: 20, totalItems: 1, totalPages: 1 } }
+
+export const payment = { id: 7, orderId: 41, amount: '25', currency: 'GBP', provider: 'STRIPE', status: 'SUCCEEDED' as const, paidAt: '2026-10-13T10:01:00Z', refundedAmount: '0', reservedRefundAmount: '0' }
+export const refund = { id: 8, orderId: 41, paymentId: 7, amount: '5', currency: 'GBP', provider: 'STRIPE', status: 'SUCCEEDED' as const, createdAt: '2026-10-14T10:01:00Z', reason: 'Return adjustment', performedByUserId: 1, resolutionCode: 'REFUND_SUCCEEDED', reviewRequired: false }
+export const financials = { payment: { state: 'ready' as const, value: payment }, refunds: { state: 'ready' as const, value: [] }, consistent: true }

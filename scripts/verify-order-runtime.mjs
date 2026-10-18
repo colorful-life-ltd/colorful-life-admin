@@ -14,6 +14,7 @@ async function run() {
   app.setPath('userData', join(folder, 'profile'))
   const requests = []
   let securityReview = true
+  let financialMode = 'empty'
   const timestamp = '2026-10-13T10:00:00Z'
   const order = {
     id: 41, user: { id: 2, firstName: 'Sam', lastName: 'Buyer', email: 'buyer@test.invalid' },
@@ -34,6 +35,11 @@ async function run() {
     requests.push({ path: req.url, method: req.method, auth: req.headers.authorization, body })
     let data
     if (req.url === '/auth/login') data = { token: 'order-runtime-token', accessTokenExpiresAt: new Date(Date.now() + 3600000).toISOString(), refreshToken: 'order-runtime-refresh', refreshExpiresAt: new Date(Date.now() + 86400000).toISOString() }
+    else if (req.url === '/orders/41/payments') data = [{ id: 7, orderId: 41, amount: '25', currency: 'GBP', provider: 'STRIPE', status: 'SUCCEEDED', paidAt: timestamp, refundedAmount: financialMode === 'full' ? '25' : '0', reservedRefundAmount: '0', providerReference: 'DO_NOT_EXPOSE', idempotencyKey: 'DO_NOT_EXPOSE' }]
+    else if (req.url === '/orders/41/refunds') {
+      if (financialMode === 'failure') { res.statusCode = 503; data = { error: 'Unavailable' } }
+      else data = financialMode === 'full' ? [{ id: 8, orderId: 41, paymentId: 7, amount: '25', currency: 'GBP', provider: 'STRIPE', status: 'SUCCEEDED', createdAt: timestamp, reason: 'Fixture refund', performedByUserId: 1, resolutionCode: 'REFUND_SUCCEEDED', reviewRequired: false, providerReference: 'DO_NOT_EXPOSE', providerOutcome: { secret: 'DO_NOT_EXPOSE' } }] : []
+    }
     else if (req.url === '/profile') data = { id: 1, email: 'admin@test.invalid', role: 'ADMIN', createdAt: timestamp, updatedAt: timestamp }
     else if (req.url.startsWith('/products?')) data = { items: [], pagination: { page: 1, pageSize: 100, totalItems: 0, totalPages: 0 } }
     else if (req.url === '/admin/categories') data = []
@@ -91,6 +97,21 @@ async function run() {
     await js("document.querySelector('form').requestSubmit()")
     await click('Orders'); await click('View order #41')
     await until("document.body.textContent.includes('Runtime LEGO set')")
+    await until("document.body.textContent.includes('£25.00 GBP')")
+    assert.equal((await js('(async () => JSON.stringify(await window.adminOrders.financials(41)))()')).includes('DO_NOT_EXPOSE'), false)
+    financialMode = 'full'
+    await click('Refresh order')
+    await until("document.body.textContent.includes('Fully refunded payment.')")
+    assert.equal(await js("[...document.querySelectorAll('button')].find(b => b.textContent === 'Confirm Shipment').disabled"), true)
+    assert.equal((await js('(async () => JSON.stringify(await window.adminOrders.financials(41)))()')).includes('DO_NOT_EXPOSE'), false)
+    financialMode = 'failure'
+    await click('Refresh order')
+    await until("document.body.textContent.includes('Refund history could not be read.')")
+    assert.equal(await js("document.body.textContent.includes('No refund history recorded in this read.')"), false)
+    financialMode = 'empty'
+    await click('Refresh order')
+    await until("document.body.textContent.includes('No refund history recorded in this read.')")
+    assert(requests.filter(r => /^\/orders\/41\/(payments|refunds)$/.test(r.path)).every(r => r.method === 'GET' && r.auth === 'Bearer order-runtime-token'))
     await click('Mark as Preparing')
     assert.equal(await js("document.querySelector('dialog').matches(':modal')"), true)
     assert.equal(requests.some(r => r.path.endsWith('/preparing')), false)
@@ -115,7 +136,7 @@ async function run() {
     assert.equal(requests.filter(r => r.path.endsWith('/fulfilment/dispatch')).length, 2)
     assert(requests.filter(r => r.path.startsWith('/admin/orders')).every(r => r.auth === 'Bearer order-runtime-token'))
     writeFileSync(join(folder, 'order-detail.png'), (await window.webContents.capturePage()).toPNG())
-    console.log('Verified authenticated order IPC, native confirmation dialogs, security-review rejection without retry, Preparing and trusted-carrier Dispatch in compiled Electron.')
+    console.log('Verified whitelisted read-only financial IPC, exact major-unit amounts, fully-refunded dispatch blocking, failed history recovery, authenticated order IPC, native confirmation dialogs, security-review rejection without retry, Preparing and trusted-carrier Dispatch in compiled Electron.')
     console.log('Runtime screenshot: ' + join(folder, 'order-detail.png'))
     clearTimeout(timeout); server.close(); app.exit(0)
   } catch (error) { console.error(error); clearTimeout(timeout); server.close(); app.exit(1) }

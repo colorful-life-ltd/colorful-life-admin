@@ -1,3 +1,5 @@
+import { parsePayments, parseRefunds, financialsConsistent } from './order-financials.js'
+import type { OrderFinancials } from './order-financials.js'
 import type { AuthService } from './auth-service.js'
 import { readBackendError } from './backend-error.js'
 import { cancellationReasons } from './order-contract.js'
@@ -78,6 +80,22 @@ export class OrderService implements AdminOrdersApi {
       throw new OrderError('api', securityReview ? messages.SECURITY_REVIEW_REQUIRED : messages[error.code ?? ''] ?? error.message, error.code, response.status)
     }
     try { return await response.json() } catch { throw malformed() }
+  }
+  async financials(id: number): Promise<OrderFinancials> {
+    validateOrderId(id)
+    const [payment, refunds] = await Promise.allSettled([
+      this.request(`/orders/${id}/payments`).then(value => parsePayments(value, id)),
+      this.request(`/orders/${id}/refunds`).then(value => parseRefunds(value, id)),
+    ])
+    // Never turn an authorization failure into a partial financial view.
+    for (const read of [payment, refunds]) {
+      if (read.status === 'rejected' && (read.reason?.status === 401 || read.reason?.status === 403 || ['auth-required', 'session-invalid', 'forbidden', 'not-authorized'].includes(read.reason?.code))) throw read.reason
+    }
+    return {
+      payment: payment.status === 'fulfilled' ? { state: 'ready', value: payment.value } : { state: 'error', message: 'Payment information could not be read. Refresh to retry.' },
+      refunds: refunds.status === 'fulfilled' ? { state: 'ready', value: refunds.value } : { state: 'error', message: 'Refund history could not be read. Refresh to retry.' },
+      consistent: payment.status === 'fulfilled' && refunds.status === 'fulfilled' && financialsConsistent(payment.value, refunds.value),
+    }
   }
   async list(page = 1, pageSize = 20): Promise<OrderPage> {
     const v = await this.request(`/admin/orders?page=${validatePage(page, 10000)}&pageSize=${validatePage(pageSize, 50)}`)

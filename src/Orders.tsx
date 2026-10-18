@@ -1,3 +1,6 @@
+import OrderFinancialDetails from './OrderFinancialDetails'
+import { dispatchFinancialWarning } from '../electron/order-financials'
+import type { OrderFinancials } from '../electron/order-financials'
 import { safeTrackingUrl } from '../electron/tracking-url'
 import { useEffect, useRef, useState } from 'react'
 import { adminOrders } from './admin-api'
@@ -12,12 +15,17 @@ const date = (v: string) => new Date(v).toLocaleString('en-GB', { dateStyle: 'me
 const money = (v: string, currency: string) => new Intl.NumberFormat('en-GB', { style: 'currency', currency }).format(Number(v))
 const message = (e: unknown) => e instanceof Error ? e.message : 'The order request failed. Please try again.'
 
+const readFinancials = async (id: number): Promise<OrderFinancials> => {
+  try { return await adminOrders.financials(id) }
+  catch { return { payment: { state: 'error', message: 'Payment information could not be read. Refresh to retry.' }, refunds: { state: 'error', message: 'Refund history could not be read. Refresh to retry.' }, consistent: false } }
+}
 type Action = 'preparing' | 'dispatch' | 'cancel'
 export default function Orders({ sessionBlocked = false }: { sessionBlocked?: boolean }) {
   const [page, setPage] = useState(1)
   const [result, setResult] = useState<OrderPage | null>(null)
   const [id, setId] = useState<number | null>(null)
   const [order, setOrder] = useState<OrderDetail | null>(null)
+  const [financials, setFinancials] = useState<OrderFinancials | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [feedback, setFeedback] = useState('')
@@ -39,10 +47,13 @@ export default function Orders({ sessionBlocked = false }: { sessionBlocked?: bo
     generation.current += 1
     void Promise.resolve().then(async () => {
       if (!active) return
-      setLoading(true); setError(''); setOrder(null); setResult(null)
+      setLoading(true); setError(''); setOrder(null); setResult(null); setFinancials(null)
       try {
         if (id === null) { const data = await adminOrders.list(page, 20); if (active) setResult(data) }
-        else { const data = await adminOrders.get(id); if (active) setOrder(data) }
+        else {
+          const [data, finance] = await Promise.all([adminOrders.get(id), readFinancials(id)])
+          if (active) { setOrder(data); setFinancials(finance) }
+        }
       } catch (e) { if (active) setError(message(e)) }
       finally { if (active) setLoading(false) }
     })
@@ -54,9 +65,18 @@ export default function Orders({ sessionBlocked = false }: { sessionBlocked?: bo
     else { if (dialog.current?.open) dialog.current.close(); if (priorFocus.current?.isConnected) priorFocus.current.focus() }
   }, [action, sessionBlocked])
 
+  const financePayment = financials?.payment.state === 'ready' ? financials.payment.value : undefined
+  const summaryMismatch = order && financePayment !== undefined && (order.paymentStatus !== (financePayment?.status ?? null)
+    || (order.payment !== null && (order.payment.currency !== financePayment?.currency || order.payment.paidAt !== financePayment?.paidAt)))
+  const financialWarning = summaryMismatch ? 'Order and payment reads do not agree. Refresh before dispatching.' : dispatchFinancialWarning(financials)
   const submit = async () => {
-    if (!order || !action || inFlight.current || sessionBlocked) return
+    if (!order || !action || inFlight.current || sessionBlocked || (action !== 'cancel' && financialWarning)) return
     const current = generation.current
+    const refresh = async () => {
+      setFinancials(null)
+      const [updated, finance] = await Promise.all([adminOrders.get(order.id), readFinancials(order.id)])
+      if (current === generation.current) { setOrder(updated); setFinancials(finance) }
+    }
     let input
     try {
       if (action === 'dispatch') {
@@ -72,14 +92,14 @@ export default function Orders({ sessionBlocked = false }: { sessionBlocked?: bo
       if (current !== generation.current) return
       setAction(null)
       setFeedback(action === 'cancel' ? 'Order cancelled. No refund was performed.' : action === 'dispatch' ? 'Shipment confirmed.' : 'Order marked as Preparing.')
-      try { setOrder(await adminOrders.get(order.id)) }
+      try { await refresh() }
       catch (e) { setOrder(null); setError(`Action succeeded, but refreshing the order failed. ${message(e)}`) }
     } catch (e) {
       if (current !== generation.current) return
       setError(message(e))
       if (isAdminIpcError(e) && e.status === 409) {
         setAction(null)
-        try { setOrder(await adminOrders.get(order.id)) }
+        try { await refresh() }
         catch (refreshError) { setOrder(null); setError(`${message(e)} Refresh failed: ${message(refreshError)}`) }
       }
     } finally { inFlight.current = false; setPending(false) }
@@ -103,14 +123,15 @@ export default function Orders({ sessionBlocked = false }: { sessionBlocked?: bo
     {!loading && order && <>
       <p>{order.user.email} · Placed {date(order.createdAt)}</p>
       <dl><dt>Order status</dt><dd>{label(order.status)}</dd><dt>Payment</dt><dd>{label(order.paymentStatus)}{order.payment?.paidAt && ` · ${date(order.payment.paidAt)}`}</dd><dt>Fulfilment</dt><dd>{label(order.fulfilmentStage)}</dd><dt>Total</dt><dd>{money(order.totalAmount, order.currency)} {order.currency}</dd></dl>
+      <OrderFinancialDetails data={financials} warning={financialWarning} />
       <h3>Products</h3><ul>{order.orderItems.map(i => <li key={i.id}>{i.productListing.legoProduct.setNumber} · {i.productListing.legoProduct.title} · {label(i.productListing.condition)}<br />{i.quantity} × {money(i.unitPrice, order.currency)} = {money(i.lineTotal, order.currency)}</li>)}</ul>
       <h3>Shipping address</h3><address>{order.deliveryRecipientName}<br />{order.deliveryLine1}<br />{order.deliveryLine2 && <>{order.deliveryLine2}<br /></>}{order.deliveryCity}<br />{order.deliveryCounty && <>{order.deliveryCounty}<br /></>}{order.deliveryPostcode}<br />{order.deliveryCountryCode}{order.deliveryPhone && <><br />{order.deliveryPhone}</>}</address>
       <h3>Shipment details</h3>{order.fulfilment.shipments.length ? order.fulfilment.shipments.map(s => <div key={s.sequence}><p>Shipment {s.sequence} · {s.carrierName} · {s.trackingNumber ?? 'No tracking number'}<br />Dispatched {date(s.dispatchedAt)}</p>{safeTrackingUrl(s.trackingUrl) && <a href={safeTrackingUrl(s.trackingUrl)!} target="_blank" rel="noopener noreferrer">Track shipment {s.sequence}</a>}{s.trackingUrl && !s.trackingUrlIncludesNumber && <p>Enter the displayed tracking number on the carrier’s website.</p>}</div>) : <p>No shipment recorded.</p>}
       {order.actualShippingCost !== null && <p>Actual shipping cost: {money(order.actualShippingCost, order.currency)}</p>}
       <h3>Fulfilment history</h3>{order.fulfilmentEvents.length ? <ol>{order.fulfilmentEvents.map(e => <li key={e.id}>{label(e.action)} · {label(e.fromStage)} → {label(e.toStage)}<br />{date(e.createdAt)} · {e.performedByUser.email} · {label(e.source)}</li>)}</ol> : <p>No fulfilment history recorded.</p>}
       <div className="order-actions">
-        {canFulfil(order) && order.fulfilmentStage === 'CONFIRMED' && <button className="button button-primary" disabled={pending} onClick={() => { setError(''); setAction('preparing') }}>Mark as Preparing</button>}
-        {canFulfil(order) && <button className="button button-primary" disabled={pending} onClick={() => { setError(''); setAction('dispatch'); setTracking(''); setCost('') }}>Confirm Shipment</button>}
+        {canFulfil(order) && order.fulfilmentStage === 'CONFIRMED' && <button className="button button-primary" disabled={pending || !!financialWarning} onClick={() => { setError(''); setAction('preparing') }}>Mark as Preparing</button>}
+        {canFulfil(order) && <button className="button button-primary" disabled={pending || !!financialWarning} onClick={() => { setError(''); setAction('dispatch'); setTracking(''); setCost('') }}>Confirm Shipment</button>}
         {canCancel(order) && <button className="button button-secondary" disabled={pending} onClick={() => { setError(''); setAction('cancel') }}>Cancel Order</button>}
       </div>
       {order.payment !== null && <p>Cancellation is unavailable for orders with a payment record.</p>}
