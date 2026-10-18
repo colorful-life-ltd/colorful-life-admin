@@ -51,6 +51,18 @@ describe('App authentication flow', () => {
     expect(window.adminAuth.login).toHaveBeenCalledWith({ email: admin.email, password: 'secret' })
   })
 
+  it('opens Inventory through the authenticated navigation and returns to Products', async () => {
+    window.adminAuth.restore = vi.fn().mockResolvedValue(adminSession)
+    window.adminInventory = { list: vi.fn().mockResolvedValue({ items: [], pagination: { page: 1, pageSize: 20, totalItems: 0, totalPages: 0 } }), pending: vi.fn().mockResolvedValue(null), movements: vi.fn(), getOutbound: vi.fn(), prepare: vi.fn(), submit: vi.fn(), finish: vi.fn() }
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Inventory' }))
+    expect(await screen.findByRole('heading', { name: 'Inventory Management' })).toBeInTheDocument()
+    expect(await screen.findByText('No inventory listings found.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Products' }))
+    expect(await screen.findByRole('heading', { name: 'Add product listing' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Inventory Management' })).not.toBeInTheDocument()
+  })
+
   it('falls through to login when the preload bridge is unavailable', async () => {
     Object.defineProperty(window, 'adminAuth', { configurable: true, writable: true, value: undefined })
     render(<App />)
