@@ -146,7 +146,8 @@ export class InventoryService implements AdminInventoryApi {
   }) }
   async finish(rawKey: string) { return this.exclusive(async () => {
     const key = shipmentKey(rawKey), { scope } = await this.scope(), current = this.read(scope)
-    if (!current || current.request.idempotencyKey !== key || current.state === 'uncertain') throw new InventoryError('conflict', 'An uncertain shipment cannot be discarded. Retry with its saved key or resolve it through the ledger.')
+    if (!current) return // A prior tombstone may have committed before its directory flush failed.
+    if (current.request.idempotencyKey !== key || current.state === 'uncertain') throw new InventoryError('conflict', 'An uncertain shipment cannot be discarded. Retry with its saved key or resolve it through the ledger.')
     this.write(scope, null)
   }) }
 }
