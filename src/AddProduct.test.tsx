@@ -41,6 +41,33 @@ describe('AddProduct workflow', () => {
 
   afterEach(() => cleanup())
 
+  it.each(['0', '-1', '0.001', '0.005'])('rejects optional sale price %s before IPC even on programmatic submission', async value => {
+    render(<AddProduct />)
+    await fillRequiredFields()
+    expect(screen.getByLabelText('Sale price')).toHaveAttribute('min', '0.01')
+    fireEvent.change(screen.getByLabelText('Sale price'), { target: { value } })
+    fireEvent.submit(screen.getByRole('button', { name: 'Create product listing' }).closest('form') as HTMLFormElement)
+    expect(await screen.findByRole('alert')).toHaveTextContent('greater than £0')
+    expect(window.adminProducts.createProduct).not.toHaveBeenCalled()
+  })
+
+  it.each(['0', '-1', '0.001'])('rejects regular selling price %s before IPC', async value => {
+    render(<AddProduct />)
+    await fillRequiredFields()
+    fireEvent.change(screen.getByLabelText('Original price'), { target: { value } })
+    fireEvent.submit(screen.getByRole('button', { name: 'Create product listing' }).closest('form') as HTMLFormElement)
+    expect(await screen.findByRole('alert')).toHaveTextContent('greater than £0')
+    expect(window.adminProducts.createProduct).not.toHaveBeenCalled()
+  })
+
+  it('keeps a valid one-penny promotion and the original selling price', async () => {
+    render(<AddProduct />)
+    await fillRequiredFields()
+    fireEvent.change(screen.getByLabelText('Sale price'), { target: { value: '0.01' } })
+    fireEvent.submit(screen.getByRole('button', { name: 'Create product listing' }).closest('form') as HTMLFormElement)
+    await waitFor(() => expect(window.adminProducts.createProduct).toHaveBeenCalledWith(expect.objectContaining({ originalPrice: 29.99, salePrice: 0.01 })))
+  })
+
   it('creates a product without images', async () => {
     render(<AddProduct />)
     expect(screen.getByLabelText('Retired Set')).not.toBeChecked()
@@ -213,7 +240,7 @@ describe('AddProduct workflow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Search products' }))
     fireEvent.click(await screen.findByRole('button', { name: /No New – Outer Box Damage offer/ }))
     fireEvent.submit(screen.getByRole('button', { name: 'Create New – Outer Box Damage offer' }).closest('form') as HTMLFormElement)
-    expect(await screen.findByRole('alert')).toHaveTextContent('valid sale price')
+    expect(await screen.findByRole('alert')).toHaveTextContent('greater than £0')
     fireEvent.change(screen.getByLabelText('Sale price (£)'), { target: { value: '12' } })
     fireEvent.submit(screen.getByRole('button', { name: 'Create New – Outer Box Damage offer' }).closest('form') as HTMLFormElement)
     expect(screen.getByRole('alert')).toHaveTextContent('damage description')
@@ -366,6 +393,7 @@ describe('AddProduct workflow', () => {
 
   it('rejects unsupported image bytes during local upload and enforces size and count limits', async () => {
     render(<AddProduct />)
+    await fillRequiredFields()
     const input = screen.getByLabelText('Product images')
     fireEvent.change(input, { target: { files: [imageFile('bad.gif', 'image/gif')] } })
     fireEvent.submit(screen.getByRole('button', { name: 'Create product listing' }).closest('form') as HTMLFormElement)

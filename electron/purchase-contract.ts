@@ -122,7 +122,7 @@ export interface AdminPurchasesApi {
 
 export interface ReviewProduct { id: number; setNumber: string; title: string }
 export type ReviewListingCreation = {
-  condition: 'NEW' | 'USED_LIKE_NEW'; originalPrice: number; salePrice?: number; currentStock: 0
+  condition: 'NEW' | 'USED_LIKE_NEW'; originalPrice: number; salePrice?: number | null; currentStock: 0
 } & ({ existingProductId: number } | {
   setNumber: string; title: string; description?: string; theme: string; categoryId: number; ageRecommendation: string; pieceCount: number
 })

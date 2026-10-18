@@ -16,7 +16,7 @@ export interface CreateProductRequest {
   pieceCount: number
   condition: ListingCondition
   originalPrice: number
-  salePrice?: number
+  salePrice?: number | null
   currentStock?: number
   isRetired?: boolean
 }
