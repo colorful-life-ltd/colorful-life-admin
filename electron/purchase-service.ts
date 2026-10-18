@@ -1,3 +1,4 @@
+import { hasValidListingPrices, priceValidationMessage } from './listing-price.js'
 import type { AuthService } from './auth-service.js'
 import type { AdminPurchasesApi, ManualPurchaseCreated, ManualPurchaseInput, ManualPurchaseSupplierOptions, Purchase, PurchaseAnalyticsSummary, PurchaseDocument, PurchaseImportResult, PurchaseItem, PurchasePage, SupplierMonthlyPurchaseAnalytics } from './purchase-contract.js'
 import type { PurchaseReview, ReviewGroup, PurchaseAmendment, ReviewProduct, ReviewListingCreation, InventoryDispositionInput } from './purchase-contract.js'
@@ -339,8 +340,9 @@ export function validateInventoryDisposition(value: unknown): InventoryDispositi
   return { ...revision, inventoryDisposition: value.inventoryDisposition }
 }
 export function validateListingCreation(value: unknown): ReviewListingCreation {
+  if (isRecord(value) && !hasValidListingPrices(value)) throw new PurchaseError('validation', priceValidationMessage)
   if (!isRecord(value) || value.currentStock !== 0 || (value.condition !== 'NEW' && value.condition !== 'USED_LIKE_NEW') ||
-    !isNumber(value.originalPrice) || value.originalPrice <= 0 || (value.salePrice !== undefined && (!isNumber(value.salePrice) || value.salePrice < 0))) throw new PurchaseError('validation', 'Invalid purchase listing')
+    !isNumber(value.originalPrice) || (value.salePrice != null && !isNumber(value.salePrice))) throw new PurchaseError('validation', 'Invalid purchase listing')
   const price: Pick<ReviewListingCreation, 'currentStock' | 'condition' | 'originalPrice' | 'salePrice'> = { currentStock: 0 as const, condition: value.condition, originalPrice: value.originalPrice,
     ...(value.salePrice === undefined ? {} : { salePrice: value.salePrice }) }
   if (positiveId(value.existingProductId)) return { ...price, existingProductId: value.existingProductId }

@@ -1,3 +1,4 @@
+import { hasValidListingPrices, isPositivePrice, priceValidationMessage } from './listing-price.js'
 import type { AuthService } from './auth-service.js'
 import { readBackendError } from './backend-error.js'
 import { colorfulLifeCategoryOptions } from './product-contract.js'
@@ -228,6 +229,7 @@ export class ProductService {
   }
 
   async createProduct(request: CreateProductRequest): Promise<ProductListing> {
+    if (!hasValidListingPrices(request)) throw new ProductError('validation', priceValidationMessage)
     const response = await this.authService.authenticatedFetch('/products', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) })
     if (!response.ok) throw await errorForResponse(response, 'create')
     return parseProduct(await response.json())
@@ -313,6 +315,7 @@ export class ProductService {
   }
 
   async createUsedOffer(productId: number, input: UsedOfferCreateInput): Promise<UsedOfferCreated> {
+    if (!isPositivePrice(input.salePrice)) throw new ProductError('validation', priceValidationMessage)
     const form = new FormData()
     form.append('originalPrice', input.salePrice.toFixed(2))
     form.append('damageDescription', input.damageDescription.trim())
@@ -394,12 +397,11 @@ export const isImageUploadPayload = (value: unknown): value is ImageUploadPayloa
 }
 
 export const isCreateProductRequest = (value: unknown): value is CreateProductRequest => {
-  if (!isRecord(value)) return false
-  const { pieceCount, condition, originalPrice } = value
-  if (!isString(value.setNumber) || !isString(value.title) || !isString(value.theme) || !isString(value.ageRecommendation) || typeof pieceCount !== 'number' || !Number.isInteger(pieceCount) || pieceCount <= 0 || (condition !== 'NEW' && condition !== 'USED_LIKE_NEW') || !isNumber(value.categoryId) || !Number.isInteger(value.categoryId) || value.categoryId <= 0 || !isNumber(originalPrice) || originalPrice <= 0) return false
-  const salePrice = value.salePrice
+  if (!isRecord(value) || !hasValidListingPrices(value)) return false
+  const { pieceCount, condition } = value
+  if (!isString(value.setNumber) || !isString(value.title) || !isString(value.theme) || !isString(value.ageRecommendation) || typeof pieceCount !== 'number' || !Number.isInteger(pieceCount) || pieceCount <= 0 || (condition !== 'NEW' && condition !== 'USED_LIKE_NEW') || !isNumber(value.categoryId) || !Number.isInteger(value.categoryId) || value.categoryId <= 0) return false
   const currentStock = value.currentStock
-  return (value.description === undefined || isString(value.description)) && (value.isRetired === undefined || typeof value.isRetired === 'boolean') && (salePrice === undefined || (isNumber(salePrice) && salePrice >= 0)) && (currentStock === undefined || (typeof currentStock === 'number' && Number.isInteger(currentStock) && currentStock >= 0))
+  return (value.description === undefined || isString(value.description)) && (value.isRetired === undefined || typeof value.isRetired === 'boolean') && (currentStock === undefined || (typeof currentStock === 'number' && Number.isInteger(currentStock) && currentStock >= 0))
 }
 
 const metadataUpdateKeys = new Set(['setNumber', 'title', 'description', 'theme', 'ageRecommendation', 'pieceCount', 'isRetired', 'categoryId'])

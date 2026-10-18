@@ -1,3 +1,4 @@
+import { hasValidListingPrices, isPositivePrice, priceValidationMessage } from '../electron/listing-price'
 import { useEffect, useRef, useState } from 'react'
 import type { AdminCategory } from '../electron/category-contract'
 import type { ReviewProduct } from '../electron/purchase-contract'
@@ -155,7 +156,7 @@ function AddProduct({ onProductCreated, onUsedOfferCreated, purchaseContext }: A
     if (condition === 'USED_LIKE_NEW') {
       const price = Number(usedSalePrice)
       if (!selectedLegoProduct) { setFormError('Select an existing LEGO product.'); return }
-      if (!Number.isFinite(price) || price <= 0) { setFormError('Enter a valid sale price greater than £0.'); return }
+      if (!isPositivePrice(price)) { setFormError(priceValidationMessage); return }
       if (!damageDescription.trim()) { setFormError('Enter a damage description.'); return }
       if (conditionPhotos.length < 1 || conditionPhotos.length > 3) { setFormError('Add 1 to 3 Condition Photos.'); return }
       setIsCreating(true)
@@ -170,6 +171,10 @@ function AddProduct({ onProductCreated, onUsedOfferCreated, purchaseContext }: A
         onUsedOfferCreated?.(offer, selectedLegoProduct.category?.id ?? null)
       } catch (error) { setFormError(getUsedOfferErrorMessage(error)) }
       finally { setIsCreating(false) }
+      return
+    }
+    if (!hasValidListingPrices({ originalPrice: Number(originalPrice), salePrice: salePrice.trim() === '' ? undefined : Number(salePrice) })) {
+      setFormError(priceValidationMessage)
       return
     }
     setIsCreating(true)
@@ -310,7 +315,7 @@ function AddProduct({ onProductCreated, onUsedOfferCreated, purchaseContext }: A
           {createdUsedOffer && <><p role="status">New – Outer Box Damage offer created: {createdUsedOffer.id}</p><button className="button button-secondary" type="button" onClick={() => { conditionPhotosRef.current.forEach(photo => URL.revokeObjectURL(photo.previewUrl)); setCreatedUsedOffer(null); setSelectedLegoProduct(null); setLookupResults([]); setLookupQuery(''); setUsedSalePrice(''); setDamageDescription(''); setConditionPhotos([]); setFormError('') }}>Add another New – Outer Box Damage item</button></>}
         </> : condition === 'NEW' && <>
         <label>Original price<input type="number" min="0.01" step="0.01" value={originalPrice} onChange={(event) => setOriginalPrice(event.target.value)} required disabled={!!createdProduct} /></label>
-        <label>Sale price<input type="number" min="0" step="0.01" value={salePrice} onChange={(event) => setSalePrice(event.target.value)} disabled={!!createdProduct} /></label>
+        <label>Sale price<input type="number" min="0.01" step="0.01" value={salePrice} onChange={(event) => setSalePrice(event.target.value)} disabled={!!createdProduct} /></label>
         {purchaseContext ? <p>Initial stock: 0. Stock is added only after approval in Purchase Review.</p> : <label>Current stock<input type="number" min="0" step="1" value={currentStock} onChange={(event) => setCurrentStock(event.target.value)} disabled={!!createdProduct} /></label>}
         {!createdProduct && <label>Product images<input type="file" accept="image/*,.jpg,.jpeg,.png,.webp" multiple onChange={handleImageSelection} /></label>}
         {images.length > 0 && <div className="image-list" aria-label="Selected product images">{images.map((image, index) => <div className="selected-image" key={image.id}>

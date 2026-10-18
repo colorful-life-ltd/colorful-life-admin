@@ -1,3 +1,4 @@
+import { hasValidListingPrices, isPositivePrice, priceValidationMessage } from './listing-price.js'
 import { safeTrackingUrl } from './tracking-url.js'
 import { OrderService } from './order-service.js'
 import { registerOrderIpc } from './order-ipc.js'
@@ -59,7 +60,7 @@ handleIpc('admin-window:maximize', (event) => {
 })
 
 handleIpc('admin-products:create', async (_event, request: unknown) => {
-  if (!isCreateProductRequest(request)) throw new ProductError('validation', 'Invalid product details.')
+  if (!isCreateProductRequest(request)) throw new ProductError('validation', typeof request === 'object' && request !== null && !hasValidListingPrices(request) ? priceValidationMessage : 'Invalid product details.')
   return productService.createProduct(request)
 })
 
@@ -79,7 +80,7 @@ handleIpc('admin-products:lookup-lego-products', async (_event, query: unknown, 
 })
 
 handleIpc('admin-products:create-used-offer', async (_event, productId: unknown, input: unknown) => {
-  if (typeof productId !== 'number' || !Number.isInteger(productId) || productId <= 0 || typeof input !== 'object' || input === null || !('salePrice' in input) || typeof input.salePrice !== 'number' || !Number.isFinite(input.salePrice) || input.salePrice <= 0 || !('damageDescription' in input) || typeof input.damageDescription !== 'string' || input.damageDescription.trim().length < 1 || input.damageDescription.trim().length > 2000 || !('conditionPhotos' in input) || !Array.isArray(input.conditionPhotos) || input.conditionPhotos.length < 1 || input.conditionPhotos.length > 3 || !input.conditionPhotos.every((photo: unknown) => isImageUploadPayload(photo) && photo.bytes.byteLength > 0 && photo.altText === undefined)) {
+  if (typeof productId !== 'number' || !Number.isInteger(productId) || productId <= 0 || typeof input !== 'object' || input === null || !('salePrice' in input) || typeof input.salePrice !== 'number' || !isPositivePrice(input.salePrice) || !('damageDescription' in input) || typeof input.damageDescription !== 'string' || input.damageDescription.trim().length < 1 || input.damageDescription.trim().length > 2000 || !('conditionPhotos' in input) || !Array.isArray(input.conditionPhotos) || input.conditionPhotos.length < 1 || input.conditionPhotos.length > 3 || !input.conditionPhotos.every((photo: unknown) => isImageUploadPayload(photo) && photo.bytes.byteLength > 0 && photo.altText === undefined)) {
     throw new ProductError('validation', 'Provide a valid price, damage description, and 1 to 3 condition photos.')
   }
   return productService.createUsedOffer(productId, input as import('./product-contract.js').UsedOfferCreateInput)
