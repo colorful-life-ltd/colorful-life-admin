@@ -47,3 +47,16 @@ it('flushes the existing parent after creating the journal directory', () => {
   new FileShipmentStore(directory, () => true, { io }).write('scope', value)
   expect(directories).toEqual([parent, directory])
 })
+it('exposes a tombstone after post-rename directory-sync failure, allowing an idempotent finish retry', async () => {
+  const { InventoryService } = await import('../electron/inventory-service')
+  const directory = root(), store = new FileShipmentStore(directory)
+  const auth = { restore: async () => ({ user: { id: 1, role: 'ADMIN' as const, email: 'test@example.test', createdAt: '2026-10-18', updatedAt: '2026-10-18' }, accessTokenExpiresAt: '2099-01-01' }), authenticatedFetch: async () => { throw new Error('No outbound I/O allowed') } }
+  const normal = new InventoryService(auth, store, 'backend')
+  const saved = await normal.prepare({ productListingId: 1, quantity: 1, shipmentReference: 'FBA', note: 'Test' })
+  const failing = new FileShipmentStore(directory, () => true, { io: { ...fs, fsyncSync: fd => { if (fs.fstatSync(fd).isDirectory()) throw Object.assign(new Error('Directory sync failed'), { code: 'EIO' }); fs.fsyncSync(fd) } }, platform: 'linux' })
+  const service = new InventoryService(auth, failing, 'backend')
+  await expect(service.finish(saved.request.idempotencyKey)).rejects.toMatchObject({ code: 'journal' })
+  expect(await service.pending()).toBeNull()
+  await expect(service.finish(saved.request.idempotencyKey)).resolves.toBeUndefined()
+  expect(await normal.pending()).toBeNull()
+})

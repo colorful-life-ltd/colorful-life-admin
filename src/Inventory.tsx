@@ -66,7 +66,14 @@ export default function Inventory({ sessionBlocked = false }: { sessionBlocked?:
     if (!pending || inFlight.current || sessionBlocked) return
     inFlight.current = true; setSending(true); setError('')
     try { await adminInventory.finish(pending.request.idempotencyKey); if (mounted.current) { setPending(null); setQuantity(''); setReference(''); setNote('') } }
-    catch (e) { if (mounted.current) setError(errorMessage(e)) }
+    catch (e) {
+      if (mounted.current) setError(errorMessage(e))
+      // Rename may have cleared the journal before a directory flush reported failure.
+      try {
+        const saved = await adminInventory.pending()
+        if (mounted.current) { setPending(saved); if (!saved) { setQuantity(''); setReference(''); setNote('') } }
+      } catch (journalFailure) { if (mounted.current) setJournalError(errorMessage(journalFailure)) }
+    }
     finally { inFlight.current = false; if (mounted.current) setSending(false) }
   }
   const listing = data?.items.find(l => l.productListingId === selected)
