@@ -1,4 +1,5 @@
 import { hasValidListingPrices, priceValidationMessage } from './listing-price.js'
+import { AuthError } from './auth-service.js'
 import type { AuthService } from './auth-service.js'
 import type { AdminPurchasesApi, ManualPurchaseCreated, ManualPurchaseInput, ManualPurchaseSupplierOptions, Purchase, PurchaseAnalyticsSummary, PurchaseDocument, PurchaseImportResult, PurchaseItem, PurchasePage, SupplierMonthlyPurchaseAnalytics } from './purchase-contract.js'
 import type { PurchaseReview, ReviewGroup, PurchaseAmendment, ReviewProduct, ReviewListingCreation, InventoryDispositionInput } from './purchase-contract.js'
@@ -28,7 +29,12 @@ const responseError = async (response: Response, importing = false): Promise<Pur
   if (code === 'AUTH_REQUIRED') return new PurchaseError('session-invalid', 'Sign in is required to continue.', response.status, code)
   if (response.status === 403 || code === 'FORBIDDEN') return new PurchaseError('forbidden', 'This account cannot manage purchase documents.', response.status, code)
   if (response.status === 404) return new PurchaseError('not-found', 'The purchase could not be found.', response.status, code)
-  if (response.status === 409) return new PurchaseError(importing ? 'duplicate' : 'conflict', importing ? 'This purchase document has already been imported.' : message, response.status, code)
+  if (response.status === 409) {
+    // The current import endpoint identifies hash duplicates with this domain error.
+    // A generic conflict must never be presented as a confirmed duplicate.
+    const duplicate = importing && /^Duplicate import hash: [a-f0-9]{64}$/.test(message)
+    return new PurchaseError(duplicate ? 'duplicate' : 'conflict', duplicate ? 'This invoice has already been imported. No duplicate was created.' : message, response.status, code)
+  }
   return new PurchaseError('server', response.status >= 500 || code === 'INTERNAL_SERVER_ERROR' ? 'The Colorful Life service is unavailable right now.' : message, response.status, code)
 }
 
@@ -236,8 +242,18 @@ export class PurchaseService implements AdminPurchasesApi {
   async importPdf(file: { bytes: Uint8Array; filename: string; mimeType: 'application/pdf' }): Promise<PurchaseImportResult> {
     const form = new FormData()
     form.append('file', new Blob([file.bytes.buffer as ArrayBuffer], { type: file.mimeType }), file.filename)
-    const response = await this.auth.authenticatedFetch('/purchases/import', { method: 'POST', body: form })
-    if (!response.ok) throw await responseError(response, true)
+    let response: Response
+    try {
+      response = await this.auth.authenticatedFetch('/purchases/import', { method: 'POST', body: form })
+    } catch (error) {
+      if (!(error instanceof TypeError) && !(error instanceof AuthError && error.code === 'network')) throw error
+      throw new PurchaseError('server', 'Could not reach the Colorful Life service. Check your connection and purchase history before retrying the import.')
+    }
+    if (!response.ok) {
+      const error = await responseError(response, true)
+      if (error.code === 'server') error.message += ' Check purchase history before retrying the import.'
+      throw error
+    }
     const value: unknown = await response.json()
     if (!isRecord(value) || !isString(value.message) || !isString(value.importHash)) throw new PurchaseError('malformed-response', 'The server returned an invalid import response.')
     return { message: value.message, importHash: value.importHash }

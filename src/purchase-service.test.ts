@@ -1,3 +1,4 @@
+import { AuthError } from '../electron/auth-service'
 import { describe, expect, it, vi } from 'vitest'
 import { AuthService } from '../electron/auth-service.js'
 import { PurchaseError, PurchaseService } from '../electron/purchase-service.js'
@@ -94,8 +95,32 @@ describe('PurchaseService', () => {
     await expect(service.list(1, 6)).rejects.toMatchObject({ code: 'malformed-response' } satisfies Partial<PurchaseError>)
   })
 
+
+  it.each([
+    [409, 'Another purchase conflict', 'conflict'],
+    [400, 'Uploaded file is not a valid PDF', 'validation'],
+    [500, 'Internal server error', 'server'],
+  ])('does not classify HTTP %s failures as duplicates', async (status, message, code) => {
+    const authenticatedFetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: message }), { status }))
+    const service = new PurchaseService({ authenticatedFetch } as unknown as AuthService)
+    await expect(service.importPdf({ bytes: new Uint8Array([1]), filename: 'same-name.pdf', mimeType: 'application/pdf' })).rejects.toMatchObject({ code, status })
+  })
+
+  it('reports an actionable network failure without claiming a duplicate or retrying', async () => {
+    const authenticatedFetch = vi.fn().mockRejectedValue(new TypeError('fetch failed'))
+    const service = new PurchaseService({ authenticatedFetch } as unknown as AuthService)
+    await expect(service.importPdf({ bytes: new Uint8Array([1]), filename: 'invoice.pdf', mimeType: 'application/pdf' })).rejects.toMatchObject({ code: 'server', message: expect.stringContaining('purchase history before retrying') })
+    expect(authenticatedFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves authentication errors rather than misreporting a network failure', async () => {
+    const error = new AuthError('auth-required', 'Sign in is required to continue.')
+    const service = new PurchaseService({ authenticatedFetch: vi.fn().mockRejectedValue(error) } as unknown as AuthService)
+    await expect(service.importPdf({ bytes: new Uint8Array([1]), filename: 'invoice.pdf', mimeType: 'application/pdf' })).rejects.toBe(error)
+  })
+
   it('maps duplicate and server responses to safe errors', async () => {
-    const authenticatedFetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Duplicate import hash' }), { status: 409 })).mockResolvedValueOnce(new Response(null, { status: 500 }))
+    const authenticatedFetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ error: `Duplicate import hash: ${'a'.repeat(64)}` }), { status: 409 })).mockResolvedValueOnce(new Response(null, { status: 500 }))
     const service = new PurchaseService({ authenticatedFetch } as unknown as AuthService)
     await expect(service.importPdf({ bytes: new Uint8Array([1]), filename: 'invoice.pdf', mimeType: 'application/pdf' })).rejects.toMatchObject({ code: 'duplicate', status: 409 } satisfies Partial<PurchaseError>)
     await expect(service.list()).rejects.toMatchObject({ code: 'server', status: 500 } satisfies Partial<PurchaseError>)

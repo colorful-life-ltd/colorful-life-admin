@@ -1,6 +1,9 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Purchases from './Purchases'
+import { PurchaseService } from '../electron/purchase-service'
+import { serializeIpcError } from '../electron/ipc-error-contract'
+import type { AuthService } from '../electron/auth-service'
 import type { Purchase, PurchasePage, PurchaseReview as Review } from '../electron/purchase-contract.js'
 
 const purchase: Purchase = { id: 3, sourceOrderReference: 'ORDER-1', sourceOrderDate: '2026-09-20T00:00:00.000Z', merchantName: null, createdAt: '2026-09-20T00:00:00.000Z', updatedAt: '2026-09-20T00:00:00.000Z', purchaseDocuments: [] }
@@ -57,6 +60,38 @@ describe('Purchases', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Import purchase document' }))
     await waitFor(() => expect(window.adminPurchases.importPdf).toHaveBeenCalled())
     expect(screen.getByRole('status')).toHaveTextContent('Purchase invoice imported successfully')
+  })
+
+
+  it.each([
+    [201, { message: 'Purchase invoice imported successfully', importHash: 'a'.repeat(64) }, 'status', 'Purchase invoice imported successfully'],
+    [409, { error: `Duplicate import hash: ${'a'.repeat(64)}` }, 'status', 'This invoice has already been imported. No duplicate was created.'],
+    [409, { error: 'Conflicting purchase details. Check the invoice reference.' }, 'alert', 'Check the invoice reference'],
+    [400, { error: 'Uploaded file is not a valid PDF' }, 'alert', 'Uploaded file is not a valid PDF'],
+    [500, { error: 'Internal server error' }, 'alert', 'service is unavailable'],
+    [0, {}, 'alert', 'Check your connection and purchase history before retrying'],
+  ] as const)('displays HTTP %s import outcomes through serialized Electron IPC', async (status, body, role, message) => {
+    const authenticatedFetch = status === 0 ? vi.fn().mockRejectedValue(new TypeError('fetch failed')) : vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status }))
+    const service = new PurchaseService({ authenticatedFetch } as unknown as AuthService)
+    // Model Main's error envelope, preload's data-only forwarding and renderer restoration.
+    vi.mocked(window.adminPurchases.importPdf).mockImplementation(async file => {
+      try { return await service.importPdf(file) }
+      catch (error) { return serializeIpcError(error) as never }
+    })
+    render(<Purchases />)
+    const input = screen.getByLabelText('PDF purchase document upload').querySelector('input') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(['%PDF-'], 'same-name.pdf', { type: 'application/pdf' })] } })
+    fireEvent.click(screen.getByRole('button', { name: 'Import purchase document' }))
+    expect(await screen.findByRole(role)).toHaveTextContent(message)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh history' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh history' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh history' })).toBeEnabled())
+    // Cancelling the picker and refreshing history must not erase the outcome.
+    fireEvent.change(input, { target: { files: [] } })
+    expect(screen.getByRole(role)).toHaveTextContent(message)
+    expect(authenticatedFetch).toHaveBeenCalledTimes(1)
+    if (role === 'status') expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    else expect(screen.queryByText(/No duplicate was created/)).not.toBeInTheDocument()
   })
 
   it('renders history and opens purchase details', async () => {

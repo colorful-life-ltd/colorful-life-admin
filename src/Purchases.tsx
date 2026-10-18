@@ -3,8 +3,9 @@ import type { ChangeEvent, DragEvent, FormEvent } from 'react'
 import PurchaseReview from './PurchaseReview'
 import PurchaseAnalytics from './PurchaseAnalytics'
 import ManualPurchaseForm from './ManualPurchaseForm'
-import type { ManualPurchaseInput, Purchase, PurchaseImportResult, PurchaseReview as Review } from '../electron/purchase-contract.js'
+import type { ManualPurchaseInput, Purchase, PurchaseReview as Review } from '../electron/purchase-contract.js'
 import { adminPurchases } from './admin-api'
+import { isAdminIpcError } from '../electron/ipc-error-contract'
 
 const maximumPdfBytes = 10 * 1024 * 1024
 const pageSize = 6
@@ -23,7 +24,7 @@ const visiblePageNumbers = (currentPage: number, totalPages: number): number[] =
 function Purchases() {
   const [file, setFile] = useState<File | null>(null)
   const [importing, setImporting] = useState(false)
-  const [importResult, setImportResult] = useState<PurchaseImportResult | null>(null)
+  const [importNotice, setImportNotice] = useState('')
   const [importError, setImportError] = useState('')
   const [purchases, setPurchases] = useState<Purchase[]>([])
   const [page, setPage] = useState(1)
@@ -104,9 +105,9 @@ function Purchases() {
   }, [loadHistory])
 
   const chooseFile = (candidate: File | undefined) => {
-    setImportResult(null)
+    if (!candidate || importing) return
+    setImportNotice('')
     setImportError('')
-    if (!candidate) return
     if (candidate.type !== 'application/pdf' && !candidate.name.toLowerCase().endsWith('.pdf')) {
       setFile(null)
       setImportError('Choose a PDF purchase document.')
@@ -127,14 +128,19 @@ function Purchases() {
     if (!file || importing) return
     setImporting(true)
     setImportError('')
-    setImportResult(null)
+    setImportNotice('')
     try {
       const result = await adminPurchases.importPdf({ bytes: new Uint8Array(await file.arrayBuffer()), filename: file.name, mimeType: 'application/pdf' })
-      setImportResult(result)
+      setImportNotice(result.message)
       setFile(null)
       await loadHistory(1, search)
     } catch (error) {
-      setImportError(messageFor(error))
+      if (isAdminIpcError(error) && error.code === 'duplicate' && error.status === 409) {
+        setImportNotice('This invoice has already been imported. No duplicate was created.')
+        setFile(null)
+      } else {
+        setImportError(messageFor(error))
+      }
     } finally {
       setImporting(false)
     }
@@ -184,7 +190,7 @@ function Purchases() {
         </div>
         {file && <div className="selected-file"><span>{file.name}</span><button type="button" onClick={() => setFile(null)} disabled={importing}>Clear</button></div>}
         {importError && <p className="error-message" role="alert">{importError}</p>}
-        {importResult && <p className="success-message" role="status">{importResult.message}</p>}
+        {importNotice && <p className="status-message" role="status" aria-atomic="true">{importNotice}</p>}
         <button className="button button-primary" type="button" onClick={() => void importDocument()} disabled={!file || importing} aria-busy={importing}>{importing ? 'Importing…' : 'Import purchase document'}</button>
       </div>
       <div className="purchase-history-card" aria-busy={historyLoading || detailsLoading}>
