@@ -101,8 +101,20 @@ if (!mainSource.includes("'/admin/products?") || !mainSource.includes("'/product
 if (preloadSource.includes('readFile') || preloadSource.includes('readdir') || preloadSource.includes('writeFile')) {
   throw new Error('The preload must not expose filesystem access.')
 }
-if (!mainSource.includes('serializeIpcError') || !preloadSource.includes('forwardIpcResult') || !rendererApiSource.includes('restoreIpcError')) {
+const securitySource = readFileSync(resolve('electron', 'renderer-security.ts'), 'utf8')
+const builtSecuritySource = readFileSync(resolve('dist-electron', 'renderer-security.js'), 'utf8')
+if (!securitySource.includes('serializeIpcError') || !preloadSource.includes('forwardIpcResult') || !rendererApiSource.includes('restoreIpcError')) {
   throw new Error('Structured service errors must survive main IPC serialization, preload forwarding, and renderer restoration.')
+}
+if ((mainSource.match(/ipcMain\.handle\(/g) ?? []).length !== 1 || !mainSource.includes('ipcMain.handle(channel, secureIpcHandler(() => mainWindow, rendererUrl, handler))') || !builtMainSource.includes('secureIpcHandler(() => mainWindow, rendererUrl, handler)') || !builtSecuritySource.includes('assertTrustedSender(event, getWindow(), trusted)')) {
+  throw new Error('Every privileged handler must validate the trusted window and main frame before executing.')
+}
+for (const event of ['will-navigate', 'will-frame-navigate', 'will-redirect', 'will-attach-webview']) {
+  if (!builtSecuritySource.includes(`'${event}'`)) throw new Error(`Missing compiled navigation guard: ${event}`)
+}
+const builtHtml = readFileSync(resolve('dist', 'index.html'), 'utf8').replaceAll('&apos;', "'").replaceAll('&#39;', "'")
+if (!builtHtml.includes('Content-Security-Policy') || !builtHtml.includes("script-src 'self'") || builtHtml.includes('unsafe-inline') || builtHtml.includes('unsafe-eval') || !builtHtml.includes('https://res.cloudinary.com')) {
+  throw new Error('Packaged renderer must have a restrictive CSP with Cloudinary image support.')
 }
 
 console.log('Verified the narrow Electron authentication boundary.')

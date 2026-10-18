@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 
 async function run() {
 const root = resolve(import.meta.dirname, '..')
+  app.setAppPath(root)
 const review = JSON.parse(readFileSync(join(root, 'src/test-fixtures/purchase-review.json'), 'utf8'))
 const requests = []
 let failReview = false

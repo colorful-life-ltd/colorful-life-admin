@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 
 async function run() {
   const root = resolve(import.meta.dirname, '..')
+  app.setAppPath(root)
   const folder = mkdtempSync(join(tmpdir(), 'colorful-life-order-runtime-'))
   app.setPath('userData', join(folder, 'profile'))
   const requests = []
