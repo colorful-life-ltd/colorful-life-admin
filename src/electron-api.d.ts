@@ -15,6 +15,7 @@ declare global {
   }
 
   interface Window {
+    adminInventory: import('../electron/inventory-contract').AdminInventoryApi
     adminOrders: AdminOrdersApi
     adminAuth: AdminAuthApi
     adminWindow: AdminWindowApi

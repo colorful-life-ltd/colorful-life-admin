@@ -1,3 +1,6 @@
+import { InventoryService } from './inventory-service.js'
+import { FileShipmentStore } from './inventory-store.js'
+import { registerInventoryIpc } from './inventory-ipc.js'
 import { hasValidListingPrices, isPositivePrice, priceValidationMessage } from './listing-price.js'
 import { safeTrackingUrl } from './tracking-url.js'
 import { OrderService } from './order-service.js'
@@ -36,6 +39,7 @@ const handleIpc = <Arguments extends unknown[], Result>(
 }
 
 registerOrderIpc(handleIpc, new OrderService(authService))
+registerInventoryIpc(handleIpc, new InventoryService(authService, new FileShipmentStore(join(app.getPath('userData'), 'inventory-shipments'), () => app.requestSingleInstanceLock()), backendUrl))
 
 const isLoginCredentials = (value: unknown): value is LoginCredentials =>
   typeof value === 'object' &&

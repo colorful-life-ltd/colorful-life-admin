@@ -99,3 +99,43 @@ export default defineConfig([
 ])
 
 ```
+
+### Inventory Management — Phase 1
+
+Inventory shows listing/product identity, current, reserved and available local stock,
+plus recorded movement history. The Backend listing API currently omits a separate
+reserved field; Admin derives it from `currentStock - availableStock` and validates
+the response. SKU is not supplied by this API; set numbers and listing IDs are shown.
+Current stock already excludes confirmed website sales, including orders not yet
+dispatched. It is not a physical shelf count. Historical opening balances are not
+invented, and Amazon warehouse inventory is not tracked.
+
+The FBA form uses the merged Backend #202 endpoints. Main validates every request,
+generates an idempotency key and writes the immutable payload to a Main-only journal
+before any POST. Files live under Electron userData `inventory-shipments`, separately
+scoped to the Backend URL and authenticated Admin ID; no access/refresh tokens or
+credentials are written. Each account may have one outstanding shipment per Backend. Before mutating a journal,
+Main claims Electron's native instance lock; another process sharing the profile
+cannot write or submit inventory until the owning process exits.
+
+After a timeout, lost response, malformed success or interrupted process, the saved
+shipment remains locked and must be retried with its original key, using the same
+Admin account. A later rejection cannot erase an earlier uncertain outcome. A Backend
+idempotency conflict requires ledger investigation; no automatic new-key fallback
+exists. A confirmed result/replay permits an explicit “Start another physical shipment”
+action. A definitively rejected first request or an unsent prepared shipment can be
+explicitly discarded. Do not delete an uncertain journal or record those goods under
+a new key. Unreadable/unwritable journals fail closed and require recovery before new
+submissions. Files may contain business shipment notes and should be preserved when
+moving an Electron profile to another machine.
+
+Confirmed success/replay refreshes live inventory and movement history. The recorded
+outbound result is a historical snapshot, not a substitute for those refreshed reads.
+Stocktakes, write-offs, generic adjustments and purchase/checkout changes are excluded.
+Backend #202's migration must already be applied to the chosen API environment.
+
+Verification uses mocked IPC/HTTP fixtures only, never the HTTP-only local Backend
+launcher for writes. `npm run test:inventory-runtime` exercises the compiled Electron
+UI and a disposable HTTP fixture, including a committed shipment with a lost response,
+retry across navigation, audit retrieval and exactly one deduction. It is included in
+`npm test`; the existing security runtime also verifies the seven new IPC channels.

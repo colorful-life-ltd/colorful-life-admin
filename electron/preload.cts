@@ -1,3 +1,4 @@
+import type { AdminInventoryApi } from './inventory-contract.js'
 import type { AdminOrdersApi } from './order-contract.js'
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
@@ -96,3 +97,14 @@ const adminOrders: AdminOrdersApi = {
   cancel: (id, reason) => forwardIpcResult(ipcRenderer.invoke('admin-orders:cancel', id, reason)),
 }
 contextBridge.exposeInMainWorld('adminOrders', adminOrders)
+
+const adminInventory: AdminInventoryApi = {
+  list: (page) => forwardIpcResult(ipcRenderer.invoke('admin-inventory:list', page)),
+  movements: (id) => forwardIpcResult(ipcRenderer.invoke('admin-inventory:movements', id)),
+  getOutbound: (id) => forwardIpcResult(ipcRenderer.invoke('admin-inventory:get-outbound', id)),
+  pending: () => forwardIpcResult(ipcRenderer.invoke('admin-inventory:pending')),
+  prepare: (input) => forwardIpcResult(ipcRenderer.invoke('admin-inventory:prepare', input)),
+  submit: (key) => forwardIpcResult(ipcRenderer.invoke('admin-inventory:submit', key)),
+  finish: (key) => forwardIpcResult(ipcRenderer.invoke('admin-inventory:finish', key)),
+}
+contextBridge.exposeInMainWorld('adminInventory', adminInventory)

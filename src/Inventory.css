@@ -1,0 +1,13 @@
+.inventory-workspace { display: grid; gap: 1rem; min-width: 0; }
+.inventory-workspace p { margin: 0; line-height: 1.55; }
+.inventory-table-scroll { overflow-x: auto; }
+.inventory-table { border-collapse: collapse; width: 100%; text-align: left; }
+.inventory-table th, .inventory-table td { padding: .8rem; border-bottom: 1px solid var(--border, #dce3eb); vertical-align: top; overflow-wrap: anywhere; }
+.inventory-table caption { text-align: left; padding: .7rem 0; }
+.inventory-table small { display: block; font-weight: normal; margin-top: .3rem; }
+.inventory-workspace nav { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+.inventory-outbound { padding: 1.2rem; border: 1px solid var(--border, #dce3eb); border-radius: 12px; display: grid; gap: 1rem; }
+.inventory-outbound fieldset { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 1rem; border: 0; padding: 1rem 0; }
+.inventory-outbound label { display: grid; gap: .4rem; }
+.inventory-outbound input, .inventory-outbound textarea { padding: .7rem; border: 1px solid #aebdcc; border-radius: 6px; font: inherit; min-width: 0; }
+.inventory-outbound code { overflow-wrap: anywhere; }
