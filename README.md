@@ -150,3 +150,20 @@ unsupported-operation errors are tolerated there. Other I/O failures fail closed
 These measures improve crash consistency but cannot guarantee durability on every
 filesystem, storage device or power-loss scenario. Preserve profiles and investigate
 corrupt journals before recording the same goods again.
+
+### Order payment and refund visibility
+
+Order details read the existing ADMIN-only payment and refund history APIs through
+`admin-orders:financials`. Main validates identities, currency/decimal amounts and
+statuses, and sends only explicitly selected display fields to the renderer.
+Amounts arrive in major currency units: `25` GBP displays as £25.00. Refund actors
+are shown by their recorded Admin ID; actor names are not provided by this API.
+
+The two reads are separate snapshots. Incomplete, inconsistent or review-required
+information must be refreshed/reviewed before dispatch; a failed history read is
+never an empty history. Fully refunded payments and funds reserved for pending or
+unresolved refunds disable preparation/dispatch locally. Partial refunds alone do
+not introduce a new dispatch prohibition. Backend payment/security/inventory
+checks remain authoritative, including when financial state changes after a read.
+Recorded refund status is displayed separately from uncertainty/review metadata.
+This screen cannot execute/reconcile refunds, release holds or change payments.

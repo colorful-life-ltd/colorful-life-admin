@@ -1,14 +1,15 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import Orders from './Orders'
-import { order, orderPage } from './test-fixtures/order'
+import { order, orderPage, financials, payment, refund } from './test-fixtures/order'
 import { serializeIpcError } from '../electron/ipc-error-contract'
+import { parseRefunds } from '../electron/order-financials'
 import type { OrderDetail } from '../electron/order-contract'
 
 beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
   HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
-  window.adminOrders = { list: vi.fn().mockResolvedValue(orderPage), get: vi.fn().mockResolvedValue(order), preparing: vi.fn().mockResolvedValue(order), dispatch: vi.fn().mockResolvedValue(order), cancel: vi.fn().mockResolvedValue(undefined) }
+  window.adminOrders = { financials: vi.fn().mockResolvedValue(financials), list: vi.fn().mockResolvedValue(orderPage), get: vi.fn().mockResolvedValue(order), preparing: vi.fn().mockResolvedValue(order), dispatch: vi.fn().mockResolvedValue(order), cancel: vi.fn().mockResolvedValue(undefined) }
 })
 afterEach(cleanup)
 const open = async (value: OrderDetail = order) => {
@@ -179,4 +180,60 @@ it('closes the native dialog during the session warning and restores the draft a
   expect(screen.getByRole('dialog')).toBeInTheDocument()
   expect(screen.getByLabelText('Tracking number')).toHaveValue('ab 123456789 gb')
   expect(window.adminOrders.dispatch).not.toHaveBeenCalled()
+})
+
+it.each([
+  ['partial', '5', '0', [{ ...refund }], false],
+  ['full', '25', '0', [{ ...refund, amount: '25' }], true],
+  ['pending', '0', '5', [{ ...refund, status: 'PROCESSING', resolutionCode: 'PROVIDER_PENDING' }], true],
+  ['unknown', '0', '5', [{ ...refund, status: 'PROCESSING', resolutionCode: 'PROVIDER_OUTCOME_UNKNOWN' }], true],
+  ['review', '5', '0', [{ ...refund, reviewRequired: true, resolutionCode: 'TERMINAL_EVIDENCE_CONFLICT' }], true],
+])('shows %s refunds without confusing recorded payment status and dispatch eligibility', async (_name, refundedAmount, reservedRefundAmount, rows, blocked) => {
+  vi.mocked(window.adminOrders.financials).mockResolvedValue({ ...financials, payment: { state: 'ready', value: { ...payment, refundedAmount, reservedRefundAmount } }, refunds: { state: 'ready', value: parseRefunds(rows, 41) } })
+  await open()
+  const section = screen.getByRole('region', { name: 'Payment and refunds' })
+  expect(within(section).getByText('STRIPE')).toBeInTheDocument()
+  expect(within(section).getAllByText('£25.00 GBP').length).toBeGreaterThan(0)
+  expect(within(section).getByText(/Admin #1/)).toBeInTheDocument()
+  expect(within(section).getByText(/Return adjustment/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Confirm Shipment' }).hasAttribute('disabled')).toBe(blocked)
+  expect(screen.getByRole('button', { name: 'Mark as Preparing' }).hasAttribute('disabled')).toBe(blocked)
+  if (_name === 'partial') expect(screen.getByText('Partially refunded payment.')).toBeInTheDocument()
+  if (_name === 'unknown') expect(screen.getByText(/no definitive outcome confirmed/)).toBeInTheDocument()
+  if (_name === 'review') expect(screen.getByText(/outcome must not be treated as conclusive/)).toBeInTheDocument()
+})
+it('shows a successful empty history and zero amounts in major units', async () => {
+  await open()
+  expect(screen.getByText('No refund history recorded in this read.')).toBeInTheDocument()
+  expect(screen.getAllByText('£0.00 GBP')).toHaveLength(2)
+  expect(within(screen.getByRole('region', { name: 'Payment and refunds' })).getByText('£25.00 GBP')).toBeInTheDocument()
+})
+it('does not turn failed history into an empty list and refreshes both reads', async () => {
+  vi.mocked(window.adminOrders.financials).mockResolvedValueOnce({ ...financials, consistent: false, refunds: { state: 'error', message: 'Refund history could not be read. Refresh to retry.' } })
+  await open()
+  expect(screen.getByRole('alert')).toHaveTextContent('Refund history could not be read')
+  expect(screen.queryByText('No refund history recorded in this read.')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Confirm Shipment' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh order' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Confirm Shipment' })).toBeEnabled())
+  expect(window.adminOrders.financials).toHaveBeenCalledTimes(2)
+})
+it('shows incomplete reads on authorization failure without preserving financial details', async () => {
+  vi.mocked(window.adminOrders.financials).mockRejectedValue(new Error('Forbidden'))
+  await open()
+  expect(screen.getByText(/Financial information is incomplete/)).toBeInTheDocument()
+  expect(within(screen.getByRole('region', { name: 'Payment and refunds' })).queryByText('£25.00 GBP')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Confirm Shipment' })).toBeDisabled()
+})
+it('warns for mismatched snapshots instead of presenting them as ready', async () => {
+  vi.mocked(window.adminOrders.financials).mockResolvedValue({ ...financials, consistent: false })
+  await open()
+  expect(screen.getByText(/They are separate snapshots/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Confirm Shipment' })).toBeDisabled()
+})
+it('cross-checks the order summary against the separate payment read', async () => {
+  vi.mocked(window.adminOrders.financials).mockResolvedValue({ ...financials, payment: { state: 'ready', value: { ...payment, status: 'FAILED' } } })
+  await open()
+  expect(screen.getByText(/Order and payment reads do not agree/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Confirm Shipment' })).toBeDisabled()
 })

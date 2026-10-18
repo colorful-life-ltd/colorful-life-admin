@@ -34,6 +34,7 @@ export interface OrderDetail extends OrderSummary {
 export interface OrderPage { items: OrderSummary[]; pagination: { page: number; pageSize: number; totalItems: number; totalPages: number } }
 export interface DispatchInput { carrier: Carrier; carrierName?: string; trackingNumber: string; actualShippingCost: number }
 export interface AdminOrdersApi {
+  financials(id: number): Promise<import('./order-financials.js').OrderFinancials>
   list(page?: number, pageSize?: number): Promise<OrderPage>
   get(id: number): Promise<OrderDetail>
   preparing(id: number): Promise<OrderDetail>

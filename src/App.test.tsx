@@ -139,7 +139,7 @@ describe('App authentication flow', () => {
   })
 
   it('keeps Orders behind authentication and opens the order section for an Admin', async () => {
-    window.adminOrders = { list: vi.fn().mockResolvedValue({ items: [], pagination: { page: 1, pageSize: 20, totalItems: 0, totalPages: 0 } }), get: vi.fn(), preparing: vi.fn(), dispatch: vi.fn(), cancel: vi.fn() }
+    window.adminOrders = { financials: vi.fn(), list: vi.fn().mockResolvedValue({ items: [], pagination: { page: 1, pageSize: 20, totalItems: 0, totalPages: 0 } }), get: vi.fn(), preparing: vi.fn(), dispatch: vi.fn(), cancel: vi.fn() }
     render(<App />)
     await screen.findByRole('button', { name: 'Sign in' })
     expect(screen.queryByRole('button', { name: 'Orders' })).not.toBeInTheDocument()
