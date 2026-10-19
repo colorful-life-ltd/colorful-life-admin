@@ -2,10 +2,11 @@ import { expect, it, vi } from 'vitest'
 import { OperationsService, validateOperationInput, safeOperationResult } from '../electron/operations-service'
 import { registerOperationsIpc } from '../electron/operations-ipc'
 import type { SavedOperation } from '../electron/operations-contract'
+import type { OperationJournal } from '../electron/operations-service'
 const input={orderId:41,requestId:'123',reason:'Withdraw erroneous cancellation request'}
 function fixture() {
-  let saved: SavedOperation|null=null
-  const store={read:vi.fn(()=>saved),write:vi.fn((_scope:string,value:SavedOperation|null)=>{saved=value})}
+  let saved: OperationJournal|SavedOperation|null=null
+  const store={read:vi.fn(()=>saved),write:vi.fn((_scope:string,value:OperationJournal|SavedOperation|null)=>{saved=value})}
   const restore=vi.fn().mockResolvedValue({user:{id:2,role:'ADMIN'}})
   const authenticatedFetch=vi.fn().mockResolvedValue(new Response(JSON.stringify({withdrawn:true,requestId:'123'})))
   return {store,restore,authenticatedFetch,service:new OperationsService({restore,authenticatedFetch},store,'https://backend.test')}
@@ -19,8 +20,8 @@ it('validates allowlisted operations, fields, exact request IDs and penny amount
 it('flushes the exact intent before sending; lost response reuses its original key and prevents payload changes',async()=>{
   const f=fixture(); f.authenticatedFetch.mockRejectedValueOnce(new Error('lost'))
   await expect(f.service.execute('withdrawCancellation',input)).rejects.toThrow('lost')
-  expect(await f.service.pending()).toMatchObject({operation:'withdrawCancellation',input,state:'uncertain'})
-  await expect(f.service.finish()).rejects.toThrow('cannot be discarded')
+  expect(await f.service.pending()).toMatchObject([{operation:'withdrawCancellation',input,state:'uncertain'}])
+  await expect(f.service.finish('withdrawCancellation',input)).rejects.toThrow('cannot be discarded')
   await expect(f.service.execute('withdrawCancellation',{...input,requestId:'124'})).rejects.toThrow('saved intent')
   await f.service.execute('withdrawCancellation',input)
   const calls=f.authenticatedFetch.mock.calls
@@ -29,13 +30,13 @@ it('flushes the exact intent before sending; lost response reuses its original k
   expect(calls[0][1].headers['Idempotency-Key']).toBe(calls[1][1].headers['Idempotency-Key'])
   expect(JSON.parse(calls[1][1].body)).toEqual({requestId:'123',reason:input.reason})
   expect(f.store.write.mock.invocationCallOrder[0]).toBeLessThan(f.authenticatedFetch.mock.invocationCallOrder[0])
-  expect(await f.service.pending()).toMatchObject({state:'confirmed'})
-  await f.service.finish();expect(await f.service.pending()).toBeNull()
+  expect(await f.service.pending()).toMatchObject([{state:'confirmed'}])
+  await f.service.finish('withdrawCancellation',input);expect(await f.service.pending()).toEqual([])
 })
 it('explains cancellation generation conflicts without switching to another request ID',async()=>{
   const f=fixture();f.authenticatedFetch.mockResolvedValueOnce(new Response(JSON.stringify({error:'CANCELLATION_VERSION_CONFLICT'}),{status:409}))
   await expect(f.service.execute('withdrawCancellation',input)).rejects.toThrow('exact active request ID')
-  expect(await f.service.pending()).toMatchObject({state:'rejected',input})
+  expect(await f.service.pending()).toMatchObject([{state:'rejected',input}])
 })
 it('blocks uncertain non-idempotent security changes rather than blindly replaying',async()=>{
   const f=fixture(),stock={orderId:41,action:'HOLD',note:'Investigated security evidence'}

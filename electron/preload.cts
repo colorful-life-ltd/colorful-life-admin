@@ -115,6 +115,7 @@ const adminOperations: AdminOperationsApi = {
   read: (operation,input) => forwardIpcResult(ipcRenderer.invoke('admin-operations:read',operation,input)),
   execute: (operation,input) => forwardIpcResult(ipcRenderer.invoke('admin-operations:execute',operation,input)),
   pending: () => forwardIpcResult(ipcRenderer.invoke('admin-operations:pending')),
-  finish: () => forwardIpcResult(ipcRenderer.invoke('admin-operations:finish')),
+  finish: (operation,input) => forwardIpcResult(ipcRenderer.invoke('admin-operations:finish',operation,input)),
+  resolve: (operation,input,decision,note) => forwardIpcResult(ipcRenderer.invoke('admin-operations:resolve',operation,input,decision,note)),
 }
 contextBridge.exposeInMainWorld('adminOperations',adminOperations)

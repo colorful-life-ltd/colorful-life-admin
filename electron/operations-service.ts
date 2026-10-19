@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { AuthService } from './auth-service.js'
 import { readBackendError } from './backend-error.js'
-import { operations, type AdminOperationsApi, type Operation, type OperationSpec, type OperatorInput, type SafeValue, type SavedOperation } from './operations-contract.js'
-export interface OperationStore { read(scope: string): unknown; write(scope: string, value: SavedOperation | null): void }
+import { operations, type AdminOperationsApi, type InvestigationDecision, type Operation, type OperationSpec, type OperatorInput, type SafeValue, type SavedOperation } from './operations-contract.js'
+/** Version 2 holds independent intents; a version 1 journal held one SavedOperation. */
+export type OperationJournal = { version: 2; intents: SavedOperation[] }
+export interface OperationStore { read(scope: string): unknown; write(scope: string, value: OperationJournal | SavedOperation | null): void }
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 function invalid(message = 'Invalid operator input. No request was sent.'): never { throw new Error(message) }
 export function operationSpec(op: unknown): OperationSpec {
@@ -49,6 +51,12 @@ const messages: Record<string,string> = {
   REFUND_REVIEW_REQUIRED: 'Refund evidence requires review. Reconcile and investigate the retained evidence.',
   DISCREPANCY_STOCKTAKE_REASON_REQUIRED: 'An open stock discrepancy needs a physical count and a reason of at least 10 characters.',
 }
+const MAX_INTENTS = 50
+// The identity an operation acts on. Unrelated orders and operations never share a slot.
+const targetFields = ['orderId', 'refundId', 'returnId', 'receiptId', 'productListingId', 'productId', 'sourceProductListingId', 'provider'] as const
+export function intentSlot(op: Operation, input: OperatorInput) {
+  return JSON.stringify([op, ...targetFields.filter(k => input[k] !== undefined).map(k => [k, input[k]])])
+}
 export class OperationsService implements AdminOperationsApi {
   private busy = false
   private auth: Pick<AuthService,'authenticatedFetch'|'restore'>
@@ -60,24 +68,43 @@ export class OperationsService implements AdminOperationsApi {
     if (!session || session.user.role !== 'ADMIN') throw new Error('Sign in as an active ADMIN to use operator controls.')
     return `${this.backend}|${session.user.id}`
   }
-  private saved(scope: string): SavedOperation | null {
-    const v = this.store.read(scope)
-    if (v === null) return null
+  private checked(v: unknown): SavedOperation {
     if (!record(v) || !['uncertain','confirmed','rejected'].includes(String(v.state)) || typeof v.key !== 'string' || !/^[a-f0-9-]{36}$/.test(v.key)) return invalid('Saved operator request is unreadable. Preserve the journal and investigate; no replacement request was sent.')
     validateOperationInput(v.operation,v.input)
     return v as unknown as SavedOperation
   }
-  async pending() { return this.saved(await this.scope()) }
-  async finish() {
-    if (this.busy) return invalid('Wait for the current operation.')
-    const scope = await this.scope(), saved = this.saved(scope)
-    if (saved?.state === 'uncertain') return invalid('An uncertain request cannot be discarded. Inspect authoritative history and reconcile the saved intent.')
-    this.store.write(scope,null)
+  private load(scope: string): SavedOperation[] {
+    const v = this.store.read(scope)
+    if (v === null) return []
+    // A version 1 journal holds exactly one intent; keep it, never drop it.
+    const intents = record(v) && v.version === 2 && Array.isArray(v.intents) ? v.intents.map(i => this.checked(i)) : [this.checked(v)]
+    if (new Set(intents.map(i => intentSlot(i.operation, i.input))).size !== intents.length || intents.length > MAX_INTENTS) return invalid('Saved operator journal is inconsistent. Preserve it and investigate; no request was sent.')
+    return intents
+  }
+  private save(scope: string, intents: SavedOperation[]) { this.store.write(scope, intents.length ? { version: 2, intents } : null) }
+  private exclusive<T>(work: () => Promise<T>) {
+    if (this.busy) return invalid('An operator action is already pending.')
+    this.busy = true
+    return work().finally(() => { this.busy = false })
+  }
+  async pending() { return this.load(await this.scope()) }
+  async finish(op: Operation, raw: OperatorInput) {
+    const input = validateOperationInput(op, raw)
+    return this.exclusive(async () => {
+      const scope = await this.scope(), intents = this.load(scope), slot = intentSlot(op, input)
+      const saved = intents.find(i => intentSlot(i.operation, i.input) === slot)
+      if (!saved) return
+      if (saved.state === 'uncertain') return invalid('An uncertain request cannot be discarded. Inspect authoritative history and reconcile the saved intent.')
+      this.save(scope, intents.filter(i => i !== saved))
+    })
   }
   private async request(op: Operation, input: OperatorInput, key?: string) {
     const spec = operationSpec(op), body = { ...input }
     const path = spec.path.replace(/:([A-Za-z]+)/g, (_, name: string) => { const v = body[name]; delete body[name]; return encodeURIComponent(String(v)) })
-    const response = await this.auth.authenticatedFetch(path, { method: spec.method, ...(spec.method === 'GET' ? {} : { headers: { 'Content-Type':'application/json', 'Idempotency-Key':key! }, body: JSON.stringify(body) }), signal: AbortSignal.timeout(30000) })
+    return this.send(path, spec.method, body, key)
+  }
+  private async send(path: string, method: OperationSpec['method'], body: OperatorInput, key?: string) {
+    const response = await this.auth.authenticatedFetch(path, { method, ...(method === 'GET' ? {} : { headers: { 'Content-Type':'application/json', 'Idempotency-Key':key! }, body: JSON.stringify(body) }), signal: AbortSignal.timeout(30000) })
     if (!response.ok) {
       const error = await readBackendError(response, 'Operator request failed. Refresh authoritative state.')
       throw Object.assign(new Error(messages[error.code ?? ''] ?? error.message), { code:'api',backendCode:error.code,status:response.status })
@@ -90,26 +117,44 @@ export class OperationsService implements AdminOperationsApi {
     return this.request(op,input)
   }
   async execute(op: Operation, raw: OperatorInput) {
-    if (this.busy) return invalid('An operator action is already pending.')
     const spec = operationSpec(op), input = validateOperationInput(op,raw)
     if (spec.method === 'GET') return invalid()
-    this.busy = true
-    try {
-      const scope = await this.scope(), previous = this.saved(scope)
-      if (previous && (previous.operation !== op || JSON.stringify(previous.input) !== JSON.stringify(input))) return invalid('A saved intent exists. Resolve it before editing the payload or starting another action.')
+    return this.exclusive(async () => {
+      const scope = await this.scope(), intents = this.load(scope), slot = intentSlot(op, input)
+      const previous = intents.find(i => intentSlot(i.operation, i.input) === slot)
+      if (previous && JSON.stringify(previous.input) !== JSON.stringify(input)) return invalid('A saved intent exists for this operation and target. Resolve it before editing the payload.')
       if (previous?.state === 'confirmed') return invalid('This intent already succeeded. Refresh history and finish the saved action before starting another.')
-      if (previous?.state === 'uncertain' && !spec.replaySafe) return invalid('The outcome is uncertain and this endpoint does not guarantee replay. Do not resubmit. Investigate authoritative history; keep the journal for recovery.')
+      if (previous?.state === 'uncertain' && !spec.replaySafe) return invalid('The outcome is uncertain and this endpoint does not guarantee replay. Do not resubmit. Investigate authoritative history, then record the investigated outcome.')
+      if (!previous && intents.length >= MAX_INTENTS) return invalid('Too many saved operator intents. Finish or resolve existing intents first.')
       const saved: SavedOperation = previous ?? { operation:op,input,key:randomUUID(),state:'uncertain' }
-      this.store.write(scope,{...saved,state:'uncertain'}) // Flush before outbound I/O.
+      const others = intents.filter(i => i !== previous)
+      this.save(scope,[...others,{...saved,state:'uncertain'}]) // Flush before outbound I/O.
       try {
         const result = await this.request(op,input,saved.key)
-        this.store.write(scope,{...saved,state:'confirmed'})
+        this.save(scope,[...others,{...saved,state:'confirmed'}])
         return result
       } catch (e) {
-        // A later validation/authorization error cannot erase an earlier uncertain write.
-        if (previous?.state !== 'uncertain' && record(e) && typeof e.status === 'number' && e.status >= 400 && e.status < 500 && e.backendCode !== 'IDEMPOTENCY_CONFLICT') this.store.write(scope,{...saved,state:'rejected'})
+        // A definitive 4xx refusal never applied; a later error cannot erase an earlier uncertain write.
+        if (previous?.state !== 'uncertain' && record(e) && typeof e.status === 'number' && e.status >= 400 && e.status < 500 && e.backendCode !== 'IDEMPOTENCY_CONFLICT') this.save(scope,[...others,{...saved,state:'rejected'}])
         throw e
       }
-    } finally { this.busy = false }
+    })
+  }
+  async resolve(op: Operation, raw: OperatorInput, decision: InvestigationDecision, note: string) {
+    const spec = operationSpec(op), input = validateOperationInput(op, raw)
+    if (!['APPLIED','NOT_APPLIED'].includes(decision) || typeof note !== 'string' || note.includes('\0') || note.trim().length < 10 || note.length > 1000) return invalid('Record what authoritative history showed (10–1000 characters) and whether the action was applied.')
+    // Replay-safe (financial) intents are settled by retrying the same key, never by an operator decision.
+    if (spec.replaySafe) return invalid('This operation is settled by retrying its saved key. An investigated decision cannot replace its financial outcome.')
+    return this.exclusive(async () => {
+      const scope = await this.scope(), intents = this.load(scope), slot = intentSlot(op, input)
+      const saved = intents.find(i => intentSlot(i.operation, i.input) === slot)
+      if (!saved || saved.state !== 'uncertain' || JSON.stringify(saved.input) !== JSON.stringify(input)) return invalid('Only a saved uncertain intent can be resolved after investigation.')
+      const target: OperatorInput = {}
+      for (const k of ['orderId','productId','productListingId','receiptId'] as const) if (typeof input[k] === 'number') target[k] = input[k]
+      // Immutable Backend audit first, keyed by the original intent; the local slot clears only after it is recorded.
+      const result = await this.send('/admin/operator-intents/resolutions', 'POST', { operation: op, decision, note: note.trim(), ...target }, saved.key)
+      this.save(scope, intents.filter(i => i !== saved))
+      return result
+    })
   }
 }

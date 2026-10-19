@@ -2,6 +2,7 @@ import { registerOperationsIpc } from './operations-ipc.js'
 import { OperationsService } from './operations-service.js'
 import { FileJournal } from './inventory-store.js'
 import type { SavedOperation } from './operations-contract.js'
+import type { OperationJournal } from './operations-service.js'
 import { InventoryService } from './inventory-service.js'
 import { FileShipmentStore } from './inventory-store.js'
 import { registerInventoryIpc } from './inventory-ipc.js'
@@ -42,7 +43,7 @@ const handleIpc = <Arguments extends unknown[], Result>(
   ipcMain.handle(channel, secureIpcHandler(() => mainWindow, rendererUrl, handler))
 }
 
-registerOperationsIpc(handleIpc, new OperationsService(authService, new FileJournal<SavedOperation>(join(app.getPath('userData'), 'operator-intents'), () => app.requestSingleInstanceLock()), backendUrl))
+registerOperationsIpc(handleIpc, new OperationsService(authService, new FileJournal<OperationJournal | SavedOperation>(join(app.getPath('userData'), 'operator-intents'), () => app.requestSingleInstanceLock()), backendUrl))
 
 registerOrderIpc(handleIpc, new OrderService(authService))
 registerInventoryIpc(handleIpc, new InventoryService(authService, new FileShipmentStore(join(app.getPath('userData'), 'inventory-shipments'), () => app.requestSingleInstanceLock()), backendUrl))
