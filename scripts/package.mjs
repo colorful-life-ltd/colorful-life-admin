@@ -2,7 +2,7 @@ import { mkdtemp, cp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
-import packager from '@electron/packager'
+import { packager } from '@electron/packager'
 const require=createRequire(import.meta.url)
 const stage=await mkdtemp(join(tmpdir(),'colorful-life-admin-package-'))
 try {
