@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { AuthService } from './auth-service.js'
 import { readBackendError } from './backend-error.js'
 import { operations, type AdminOperationsApi, type InvestigationDecision, type Operation, type OperationSpec, type OperatorInput, type SafeValue, type SavedOperation } from './operations-contract.js'
@@ -35,7 +35,7 @@ export function validateOperationInput(op: unknown, value: unknown): OperatorInp
   return input
 }
 // Explicit DTO allowlist: never forward raw provider outcomes, keys or credentials.
-const visible = new Set('evidence reviewEvidence reviewDetails correlations parentReference reference providerEventId paymentIntentId paypalOrderId captureId receivedAt processedAt resourceStatus invalidFields listing movement audit type quantityChange sourceProductListingId targetProductListingId buckets challenges auditId corroborationId cancellation activeRequestId eligible id orderId paymentId refundId receiptId requestId actorId performedByUserId status state kind amount currency refundedAmount reservedRefundAmount reviewRequired reviewRevision revision resolutionCode reason reasonNote note createdAt updatedAt paidAt requestedAt authorizedAt receivedAt inspectedAt completedAt cancelledAt reviewedAt processingError eventType provider handled processed replayed requested active withdrawn cancelled updated count removed pruned details history refund refunds orderItems returns quantity restockQuantity condition inspectionNote productListing legoProduct title setNumber productListingId currentStock reservedStock availableStock originalPrice salePrice isPublished availabilityState active discrepancies shortfall appliedQuantity shipmentReference items pagination page pageSize totalItems totalPages policies reviews counts providerOutcomes providerBudgets environmentEnabled enabled capacity releasedAt receiptIds evidenceReferences source key requestId evidenceId successReceiptId attemptId confirmed preparingAt dispatchedAt completedAt fulfilment stage shipments carrierName trackingNumber trackingUrl tracking progress deliveredAt'.split(' '))
+const visible = new Set('evidence reviewEvidence reviewDetails correlations parentReference reference providerEventId paymentIntentId paypalOrderId captureId receivedAt processedAt resourceStatus invalidFields listing movement audit type quantityChange sourceProductListingId targetProductListingId buckets challenges auditId corroborationId cancellation activeRequestId eligible id orderId paymentId refundId receiptId requestId actorId performedByUserId status state kind amount currency refundedAmount reservedRefundAmount reviewRequired reviewRevision revision resolutionCode reason reasonNote note createdAt updatedAt paidAt requestedAt authorizedAt receivedAt inspectedAt completedAt cancelledAt reviewedAt processingError eventType provider handled processed replayed requested active withdrawn cancelled updated count removed pruned details history refund refunds orderItems returns quantity restockQuantity condition inspectionNote productListing legoProduct title setNumber productListingId currentStock reservedStock availableStock originalPrice salePrice isPublished availabilityState active discrepancies shortfall appliedQuantity shipmentReference items pagination page pageSize totalItems totalPages policies reviews counts providerOutcomes providerBudgets environmentEnabled enabled capacity releasedAt receiptIds evidenceReferences source key requestId intentFingerprint evidenceId successReceiptId attemptId confirmed preparingAt dispatchedAt completedAt fulfilment stage shipments carrierName trackingNumber trackingUrl tracking progress deliveredAt'.split(' '))
 export function safeOperationResult(value: unknown, depth = 0): SafeValue {
   if (depth > 12) return invalid('Operator response is too deeply nested.')
   if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value)) return value
@@ -52,7 +52,17 @@ const messages: Record<string,string> = {
   DISCREPANCY_STOCKTAKE_REASON_REQUIRED: 'An open stock discrepancy needs a physical count and a reason of at least 10 characters.',
 }
 const MAX_INTENTS = 50
+/** Sorted-key JSON; must match the Backend's canonical intent fingerprint. */
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  if (value !== null && typeof value === 'object') return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`).join(',')}}`
+  return JSON.stringify(value)
+}
+export const intentFingerprint = (operation: Operation, intent: OperatorInput) => createHash('sha256').update(canonicalJson({ operation, intent })).digest('hex')
 // The identity an operation acts on. Unrelated orders and operations never share a slot.
+// paymentId is deliberately not part of a refund slot: the Backend enforces one Payment per
+// Order (unique Payment.orderId) and refunds only that order's payment, so the order already
+// identifies the payment. Refund intents for one order therefore serialize.
 const targetFields = ['orderId', 'refundId', 'returnId', 'receiptId', 'productListingId', 'productId', 'sourceProductListingId', 'provider'] as const
 export function intentSlot(op: Operation, input: OperatorInput) {
   return JSON.stringify([op, ...targetFields.filter(k => input[k] !== undefined).map(k => [k, input[k]])])
@@ -103,7 +113,7 @@ export class OperationsService implements AdminOperationsApi {
     const path = spec.path.replace(/:([A-Za-z]+)/g, (_, name: string) => { const v = body[name]; delete body[name]; return encodeURIComponent(String(v)) })
     return this.send(path, spec.method, body, key)
   }
-  private async send(path: string, method: OperationSpec['method'], body: OperatorInput, key?: string) {
+  private async send(path: string, method: OperationSpec['method'], body: Record<string, unknown>, key?: string) {
     const response = await this.auth.authenticatedFetch(path, { method, ...(method === 'GET' ? {} : { headers: { 'Content-Type':'application/json', 'Idempotency-Key':key! }, body: JSON.stringify(body) }), signal: AbortSignal.timeout(30000) })
     if (!response.ok) {
       const error = await readBackendError(response, 'Operator request failed. Refresh authoritative state.')
@@ -151,8 +161,10 @@ export class OperationsService implements AdminOperationsApi {
       if (!saved || saved.state !== 'uncertain' || JSON.stringify(saved.input) !== JSON.stringify(input)) return invalid('Only a saved uncertain intent can be resolved after investigation.')
       const target: OperatorInput = {}
       for (const k of ['orderId','productId','productListingId','receiptId'] as const) if (typeof input[k] === 'number') target[k] = input[k]
-      // Immutable Backend audit first, keyed by the original intent; the local slot clears only after it is recorded.
-      const result = await this.send('/admin/operator-intents/resolutions', 'POST', { operation: op, decision, note: note.trim(), ...target }, saved.key)
+      // Immutable Backend audit first, keyed by the original intent and bound to its exact payload.
+      // The local slot clears only after the recorded fingerprint matches this intent.
+      const result = await this.send('/admin/operator-intents/resolutions', 'POST', { operation: op, decision, note: note.trim(), intent: input, ...target }, saved.key)
+      if (!record(result) || result.intentFingerprint !== intentFingerprint(op, input)) return invalid('The recorded investigation does not match this saved intent. The intent was kept; inspect the order audit before retrying.')
       this.save(scope, intents.filter(i => i !== saved))
       return result
     })

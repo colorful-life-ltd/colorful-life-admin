@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { OperationsService, intentSlot, type OperationJournal } from '../electron/operations-service'
+import { OperationsService, intentFingerprint, intentSlot, type OperationJournal } from '../electron/operations-service'
 import type { SavedOperation } from '../electron/operations-contract'
 const security = { orderId: 41, action: 'RELEASE', note: 'Mistyped order identifier' }
 const refund = { orderId: 42, paymentId: 7, amount: 5, reason: 'Customer refund request' }
@@ -41,11 +41,15 @@ it('records an audited investigated outcome for an uncertain non-replayable inte
   f.authenticatedFetch.mockResolvedValueOnce(json({ error: 'OPERATOR_INTENT_RESOLUTION_UNAVAILABLE' }, 503))
   await expect(f.service.resolve('securityReview', security, 'NOT_APPLIED', 'Order audit shows no security event')).rejects.toThrow()
   expect(await f.service.pending()).toHaveLength(2) // The local intent survives a failed audit write.
-  f.authenticatedFetch.mockResolvedValueOnce(json({ auditId: '9', replayed: false }, 201))
-  expect(await f.service.resolve('securityReview', security, 'NOT_APPLIED', 'Order audit shows no security event')).toEqual({ auditId: '9', replayed: false })
+  // A recorded fingerprint for a different payload never clears the intent.
+  f.authenticatedFetch.mockResolvedValueOnce(json({ auditId: '8', replayed: false, intentFingerprint: intentFingerprint('securityReview', { ...security, action: 'HOLD' }) }, 201))
+  await expect(f.service.resolve('securityReview', security, 'NOT_APPLIED', 'Order audit shows no security event')).rejects.toThrow('does not match')
+  expect(await f.service.pending()).toHaveLength(2)
+  f.authenticatedFetch.mockResolvedValueOnce(json({ auditId: '9', replayed: false, intentFingerprint: intentFingerprint('securityReview', security) }, 201))
+  expect(await f.service.resolve('securityReview', security, 'NOT_APPLIED', 'Order audit shows no security event')).toEqual({ auditId: '9', replayed: false, intentFingerprint: intentFingerprint('securityReview', security) })
   const [path, init] = f.authenticatedFetch.mock.calls.at(-1)!
   expect(path).toBe('/admin/operator-intents/resolutions'); expect(init.method).toBe('POST'); expect(init.headers['Idempotency-Key']).toBe(key)
-  expect(JSON.parse(init.body)).toEqual({ operation: 'securityReview', decision: 'NOT_APPLIED', note: 'Order audit shows no security event', orderId: 41 })
+  expect(JSON.parse(init.body)).toEqual({ operation: 'securityReview', decision: 'NOT_APPLIED', note: 'Order audit shows no security event', intent: security, orderId: 41 })
   expect(await f.service.pending()).toMatchObject([{ operation: 'completeOrder', state: 'uncertain' }])
 })
 it('keeps uncertain financial intents fail-closed: no operator decision, same-key retry only, no payload change', async () => {
@@ -71,4 +75,24 @@ it('derives slots from operation and target identity only', () => {
   expect(intentSlot('securityReview', security)).not.toBe(intentSlot('securityReview', { ...security, orderId: 43 }))
   expect(intentSlot('securityReview', security)).not.toBe(intentSlot('completeOrder', { orderId: 41 }))
   expect(intentSlot('refund', refund)).toBe(intentSlot('refund', { ...refund, amount: 6 }))
+})
+it('fingerprints match the Backend canonical form: known answer, key order and payload sensitivity', () => {
+  expect(intentFingerprint('securityReview', security)).toBe('49cf11ea376dd7b12055cd1ecc1eb8aa17625edc8674cc2c0ebd1aee834150a9')
+  expect(intentFingerprint('securityReview', { note: security.note, action: 'RELEASE', orderId: 41 })).toBe('49cf11ea376dd7b12055cd1ecc1eb8aa17625edc8674cc2c0ebd1aee834150a9')
+  expect(intentFingerprint('securityReview', { ...security, action: 'HOLD' })).not.toBe('49cf11ea376dd7b12055cd1ecc1eb8aa17625edc8674cc2c0ebd1aee834150a9')
+  expect(intentFingerprint('completeOrder', security)).not.toBe('49cf11ea376dd7b12055cd1ecc1eb8aa17625edc8674cc2c0ebd1aee834150a9')
+})
+it('refund intents share an order slot by design: one Payment per Order, so paymentId cannot select another payment', async () => {
+  // Backend invariant: unique Payment.orderId; POST /orders/:id/refunds 404s a paymentId of another order.
+  expect(intentSlot('refund', refund)).toBe(intentSlot('refund', { ...refund, paymentId: 8 }))
+  const f = fixture(); f.authenticatedFetch.mockRejectedValueOnce(new Error('lost'))
+  await expect(f.service.execute('refund', refund)).rejects.toThrow()
+  // An uncertain refund keeps every other refund intent for that order fail-closed, whatever paymentId is entered.
+  await expect(f.service.execute('refund', { ...refund, paymentId: 8 })).rejects.toThrow('saved intent exists')
+  expect(f.authenticatedFetch).toHaveBeenCalledTimes(1)
+  // A wrong payment for the order is a definitive Backend refusal, then finishable.
+  const g = fixture(); g.authenticatedFetch.mockResolvedValueOnce(json({ error: 'Payment not found for order' }, 404))
+  await expect(g.service.execute('refund', { ...refund, paymentId: 8 })).rejects.toThrow()
+  expect(await g.service.pending()).toMatchObject([{ state: 'rejected' }])
+  await g.service.finish('refund', { ...refund, paymentId: 8 }); expect(await g.service.pending()).toEqual([])
 })
