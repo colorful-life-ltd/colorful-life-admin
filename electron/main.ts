@@ -1,3 +1,8 @@
+import { registerOperationsIpc } from './operations-ipc.js'
+import { OperationsService } from './operations-service.js'
+import { FileJournal } from './inventory-store.js'
+import type { SavedOperation } from './operations-contract.js'
+import type { OperationJournal } from './operations-service.js'
 import { InventoryService } from './inventory-service.js'
 import { FileShipmentStore } from './inventory-store.js'
 import { registerInventoryIpc } from './inventory-ipc.js'
@@ -37,6 +42,8 @@ const handleIpc = <Arguments extends unknown[], Result>(
 ): void => {
   ipcMain.handle(channel, secureIpcHandler(() => mainWindow, rendererUrl, handler))
 }
+
+registerOperationsIpc(handleIpc, new OperationsService(authService, new FileJournal<OperationJournal | SavedOperation>(join(app.getPath('userData'), 'operator-intents'), () => app.requestSingleInstanceLock()), backendUrl))
 
 registerOrderIpc(handleIpc, new OrderService(authService))
 registerInventoryIpc(handleIpc, new InventoryService(authService, new FileShipmentStore(join(app.getPath('userData'), 'inventory-shipments'), () => app.requestSingleInstanceLock()), backendUrl))
@@ -87,6 +94,7 @@ handleIpc('admin-products:create-used-offer', async (_event, productId: unknown,
   if (typeof productId !== 'number' || !Number.isInteger(productId) || productId <= 0 || typeof input !== 'object' || input === null || !('salePrice' in input) || typeof input.salePrice !== 'number' || !isPositivePrice(input.salePrice) || !('damageDescription' in input) || typeof input.damageDescription !== 'string' || input.damageDescription.trim().length < 1 || input.damageDescription.trim().length > 2000 || !('conditionPhotos' in input) || !Array.isArray(input.conditionPhotos) || input.conditionPhotos.length < 1 || input.conditionPhotos.length > 3 || !input.conditionPhotos.every((photo: unknown) => isImageUploadPayload(photo) && photo.bytes.byteLength > 0 && photo.altText === undefined)) {
     throw new ProductError('validation', 'Provide a valid price, damage description, and 1 to 3 condition photos.')
   }
+  if ('sourceNewListingId' in input && (typeof input.sourceNewListingId !== 'number' || !Number.isSafeInteger(input.sourceNewListingId) || input.sourceNewListingId < 1 || !('reasonNote' in input) || typeof input.reasonNote !== 'string' || input.reasonNote.trim().length < 10 || input.reasonNote.length > 1000)) throw new ProductError('validation','A conversion requires an exact source listing and reason.')
   return productService.createUsedOffer(productId, input as import('./product-contract.js').UsedOfferCreateInput)
 })
 

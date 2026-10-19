@@ -1,3 +1,4 @@
+import Operations from './Operations'
 import OrderFinancialDetails from './OrderFinancialDetails'
 import { dispatchFinancialWarning } from '../electron/order-financials'
 import type { OrderFinancials } from '../electron/order-financials'
@@ -126,15 +127,16 @@ export default function Orders({ sessionBlocked = false }: { sessionBlocked?: bo
       <OrderFinancialDetails data={financials} warning={financialWarning} />
       <h3>Products</h3><ul>{order.orderItems.map(i => <li key={i.id}>{i.productListing.legoProduct.setNumber} · {i.productListing.legoProduct.title} · {label(i.productListing.condition)}<br />{i.quantity} × {money(i.unitPrice, order.currency)} = {money(i.lineTotal, order.currency)}</li>)}</ul>
       <h3>Shipping address</h3><address>{order.deliveryRecipientName}<br />{order.deliveryLine1}<br />{order.deliveryLine2 && <>{order.deliveryLine2}<br /></>}{order.deliveryCity}<br />{order.deliveryCounty && <>{order.deliveryCounty}<br /></>}{order.deliveryPostcode}<br />{order.deliveryCountryCode}{order.deliveryPhone && <><br />{order.deliveryPhone}</>}</address>
-      <h3>Shipment details</h3>{order.fulfilment.shipments.length ? order.fulfilment.shipments.map(s => <div key={s.sequence}><p>Shipment {s.sequence} · {s.carrierName} · {s.trackingNumber ?? 'No tracking number'}<br />Dispatched {date(s.dispatchedAt)}</p>{safeTrackingUrl(s.trackingUrl) && <a href={safeTrackingUrl(s.trackingUrl)!} target="_blank" rel="noopener noreferrer">Track shipment {s.sequence}</a>}{s.trackingUrl && !s.trackingUrlIncludesNumber && <p>Enter the displayed tracking number on the carrier’s website.</p>}</div>) : <p>No shipment recorded.</p>}
+      <h3>Shipment details</h3>{order.fulfilment.shipments.length ? order.fulfilment.shipments.map(s => <div key={s.sequence}><p>Shipment {s.sequence} · {s.carrierName} · {s.trackingNumber ?? 'No tracking number'}{s.tracking && ` · ${label(s.tracking.progress)}`}<br />Dispatched {date(s.dispatchedAt)}</p>{safeTrackingUrl(s.trackingUrl) && <a href={safeTrackingUrl(s.trackingUrl)!} target="_blank" rel="noopener noreferrer">Track shipment {s.sequence}</a>}{s.trackingUrl && !s.trackingUrlIncludesNumber && <p>Enter the displayed tracking number on the carrier’s website.</p>}</div>) : <p>No shipment recorded.</p>}
       {order.actualShippingCost !== null && <p>Actual shipping cost: {money(order.actualShippingCost, order.currency)}</p>}
       <h3>Fulfilment history</h3>{order.fulfilmentEvents.length ? <ol>{order.fulfilmentEvents.map(e => <li key={e.id}>{label(e.action)} · {label(e.fromStage)} → {label(e.toStage)}<br />{date(e.createdAt)} · {e.performedByUser.email} · {label(e.source)}</li>)}</ol> : <p>No fulfilment history recorded.</p>}
+      {window.adminOperations && <Operations key={order.id} orderId={order.id} sessionBlocked={pending} />}
       <div className="order-actions">
         {canFulfil(order) && order.fulfilmentStage === 'CONFIRMED' && <button className="button button-primary" disabled={pending || !!financialWarning} onClick={() => { setError(''); setAction('preparing') }}>Mark as Preparing</button>}
         {canFulfil(order) && <button className="button button-primary" disabled={pending || !!financialWarning} onClick={() => { setError(''); setAction('dispatch'); setTracking(''); setCost('') }}>Confirm Shipment</button>}
         {canCancel(order) && <button className="button button-secondary" disabled={pending} onClick={() => { setError(''); setAction('cancel') }}>Cancel Order</button>}
       </div>
-      {order.payment !== null && <p>Cancellation is unavailable for orders with a payment record.</p>}
+      {order.payment !== null && <p>Paid cancellation and refund controls are available below in Operator workflows.</p>}
     </>}
     <dialog ref={dialog} className="order-dialog" aria-labelledby="order-confirm-title" onCancel={e => { if (pending) e.preventDefault(); else setAction(null) }}>
       <form onSubmit={e => { e.preventDefault(); void submit() }}>

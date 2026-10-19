@@ -1,5 +1,6 @@
 // No real Backend/database: exercise compiled Main/preload in Chromium with local fixtures.
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
+app.disableHardwareAcceleration()
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { mkdtempSync, readFileSync } from 'node:fs'
@@ -33,7 +34,7 @@ async function run() {
   let window
   const consoleMessages = []
   const ready = new Promise(resolve => app.once('browser-window-created', (_event, win) => {
-    window = win; win.hide(); win.webContents.on('console-message', details => consoleMessages.push(details.message)); win.webContents.once('did-finish-load', resolve)
+    window = win; win.show(); win.webContents.on('console-message', details => consoleMessages.push(details.message)); win.webContents.once('did-finish-load', resolve)
   }))
   try {
     await import(pathToFileURL(join(root, 'dist-electron/main.js')).href)

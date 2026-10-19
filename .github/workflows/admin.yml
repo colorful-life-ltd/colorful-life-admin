@@ -1,0 +1,37 @@
+name: Admin integration
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Prepare Electron sandbox on the disposable runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openbox wmctrl
+          node node_modules/electron/install.js
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+      - run: npm run test:contracts
+      - run: npm run typecheck
+      - run: npx tsc -p tsconfig.electron.json --noEmit
+      - run: npm run lint
+      - run: npm run test:unit
+      - run: npm run build
+      - run: npm run test:electron-boundary
+      - name: Verify Electron in a sandboxed desktop session
+        run: xvfb-run -a --server-args="-screen 0 1920x1080x24" dbus-run-session -- bash scripts/ci-electron-runtime.sh
+      - run: npm run package
+      - run: npm run verify:package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: colorful-life-admin-linux-x64-unsigned
+          path: release/
+          if-no-files-found: error

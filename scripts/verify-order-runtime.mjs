@@ -1,5 +1,6 @@
 // Compiled Electron main/preload and production renderer against a disposable HTTP fixture.
 import { app } from 'electron'
+app.disableHardwareAcceleration()
 import { createServer } from 'node:http'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -15,6 +16,8 @@ async function run() {
   const requests = []
   let securityReview = true
   let financialMode = 'empty'
+  let cancellationLost = false
+  const cancellationId = '9007199254740993'
   const timestamp = '2026-10-13T10:00:00Z'
   const order = {
     id: 41, user: { id: 2, firstName: 'Sam', lastName: 'Buyer', email: 'buyer@test.invalid' },
@@ -32,7 +35,7 @@ async function run() {
     for await (const chunk of req) chunks.push(chunk)
     const bodyText = Buffer.concat(chunks).toString()
     const body = bodyText ? JSON.parse(bodyText) : undefined
-    requests.push({ path: req.url, method: req.method, auth: req.headers.authorization, body })
+    requests.push({ path: req.url, method: req.method, auth: req.headers.authorization, key: req.headers['idempotency-key'], body })
     let data
     if (req.url === '/auth/login') data = { token: 'order-runtime-token', accessTokenExpiresAt: new Date(Date.now() + 3600000).toISOString(), refreshToken: 'order-runtime-refresh', refreshExpiresAt: new Date(Date.now() + 86400000).toISOString() }
     else if (req.url === '/orders/41/payments') data = [{ id: 7, orderId: 41, amount: '25', currency: 'GBP', provider: 'STRIPE', status: 'SUCCEEDED', paidAt: timestamp, refundedAmount: financialMode === 'full' ? '25' : '0', reservedRefundAmount: '0', providerReference: 'DO_NOT_EXPOSE', idempotencyKey: 'DO_NOT_EXPOSE' }]
@@ -46,6 +49,17 @@ async function run() {
     else if (req.url === '/admin/products/product-availability') data = { totalProducts: 0, totalInventory: 0, activeProducts: 0, inactiveProducts: 0 }
     else if (req.url.startsWith('/admin/orders?')) data = { items: [order], pagination: { page: 1, pageSize: 20, totalItems: 1, totalPages: 1 } }
     else if (req.url === '/admin/orders/41') data = order
+    else if (req.url === '/admin/orders/41/audit') data = [{id:cancellationId,kind:'PAID_CANCELLATION_REQUESTED',actorId:1,details:{reason:'Runtime exact generation cancellation'},createdAt:timestamp}]
+    else if (req.url === '/admin/orders/41/fulfilment/eligibility') data = {eligible:false,reason:'CANCELLATION_PENDING'}
+    else if (req.url === '/admin/orders/41/request-paid-cancellation') {
+      assert.equal(req.method,'POST'); assert.equal(body.reason,'Runtime exact generation cancellation')
+      if (!cancellationLost) {cancellationLost=true;res.destroy();return}
+      data={requested:true,replayed:true,requestId:cancellationId,active:true}
+    }
+    else if (req.url === '/admin/orders/41/withdraw-paid-cancellation') {
+      assert.equal(typeof body.requestId,'string'); assert.equal(body.requestId,cancellationId)
+      data={withdrawn:true,replayed:false,requestId:cancellationId}
+    }
     else if (req.url === '/admin/orders/41/fulfilment/preparing') {
       assert.deepEqual(body, {})
       order.preparingAt = timestamp; order.fulfilmentStage = 'PREPARING'; order.fulfilment.stage = 'PREPARING'; order.fulfilment.preparingAt = timestamp
@@ -68,7 +82,7 @@ async function run() {
   process.env.COLORFUL_LIFE_BACKEND_URL = 'http://127.0.0.1:' + server.address().port
   process.env.ELECTRON_RENDERER_URL = pathToFileURL(join(root, 'dist/index.html')).href
   let window
-  const ready = new Promise(resolve => app.once('browser-window-created', (_event, win) => { window = win; win.hide(); win.webContents.once('did-finish-load', resolve) }))
+  const ready = new Promise(resolve => app.once('browser-window-created', (_event, win) => { window = win; win.show(); win.webContents.once('did-finish-load', resolve) }))
   const timeout = setTimeout(() => { console.error('Order runtime timed out'); app.exit(1) }, 45000)
   try {
     await import(pathToFileURL(join(root, 'dist-electron/main.js')).href)
@@ -112,6 +126,26 @@ async function run() {
     await click('Refresh order')
     await until("document.body.textContent.includes('No refund history recorded in this read.')")
     assert(requests.filter(r => /^\/orders\/41\/(payments|refunds)$/.test(r.path)).every(r => r.method === 'GET' && r.auth === 'Bearer order-runtime-token'))
+    // Lost-response recovery across the compiled IPC boundary retains the exact
+    // intent and key. Large cancellation generations never become JS numbers.
+    const cancellationInput = {orderId:41,reason:'Runtime exact generation cancellation'}
+    const lost = await js(`window.adminOperations.execute('requestCancellation',${JSON.stringify(cancellationInput)})`)
+    assert.ok(lost.__colorfulLifeAdminIpcError)
+    assert.equal((await js('window.adminOperations.pending()'))[0].state,'uncertain')
+    const retry = await js(`window.adminOperations.execute('requestCancellation',${JSON.stringify(cancellationInput)})`)
+    assert.equal(retry.requestId,cancellationId)
+    const attempts=requests.filter(r=>r.path.endsWith('/request-paid-cancellation'))
+    assert.equal(attempts.length,2);assert.equal(attempts[0].key,attempts[1].key);assert.deepEqual(attempts[0].body,attempts[1].body)
+    await click('Operator workflows')
+    await until("document.body.textContent.includes('Saved Request paid cancellation (order Id 41): confirmed')")
+    await click('Finish saved action')
+    await until("!document.body.textContent.includes('Saved Request paid cancellation (order Id 41): confirmed')")
+    const withdrawn = await js(`window.adminOperations.execute('withdrawCancellation',${JSON.stringify({orderId:41,requestId:cancellationId,reason:'Runtime reasoned withdrawal before refund'})})`)
+    assert.equal(withdrawn.requestId,cancellationId);assert.equal(withdrawn.withdrawn,true)
+    await js(`window.adminOperations.finish('withdrawCancellation',${JSON.stringify({orderId:41,requestId:cancellationId,reason:'Runtime reasoned withdrawal before refund'})})`)
+    assert.deepEqual(await js('window.adminOperations.pending()'),[])
+    await click('Orders');await click('View order #41')
+    await until("document.body.textContent.includes('Runtime LEGO set')")
     await click('Mark as Preparing')
     assert.equal(await js("document.querySelector('dialog').matches(':modal')"), true)
     assert.equal(requests.some(r => r.path.endsWith('/preparing')), false)
@@ -136,7 +170,7 @@ async function run() {
     assert.equal(requests.filter(r => r.path.endsWith('/fulfilment/dispatch')).length, 2)
     assert(requests.filter(r => r.path.startsWith('/admin/orders')).every(r => r.auth === 'Bearer order-runtime-token'))
     writeFileSync(join(folder, 'order-detail.png'), (await window.webContents.capturePage()).toPNG())
-    console.log('Verified whitelisted read-only financial IPC, exact major-unit amounts, fully-refunded dispatch blocking, failed history recovery, authenticated order IPC, native confirmation dialogs, security-review rejection without retry, Preparing and trusted-carrier Dispatch in compiled Electron.')
+    console.log('Verified exact-generation cancellation/withdrawal and durable identical-key lost-response replay, whitelisted read-only financial IPC, exact major-unit amounts, fully-refunded dispatch blocking, failed history recovery, authenticated order IPC, native confirmation dialogs, security-review rejection without retry, Preparing and trusted-carrier Dispatch in compiled Electron.')
     console.log('Runtime screenshot: ' + join(folder, 'order-detail.png'))
     clearTimeout(timeout); server.close(); app.exit(0)
   } catch (error) { console.error(error); clearTimeout(timeout); server.close(); app.exit(1) }

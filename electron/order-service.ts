@@ -17,7 +17,7 @@ const nullableText = (v: unknown) => v === null || text(v)
 const date = (v: unknown) => text(v) && Number.isFinite(Date.parse(v))
 const nullableDate = (v: unknown) => v === null || date(v)
 const money = (v: unknown) => text(v) && /^\d+(\.\d+)?$/.test(v)
-const stage = (v: unknown) => v === null || ['CONFIRMED', 'PREPARING', 'DISPATCHED'].includes(String(v))
+const stage = (v: unknown) => v === null || ['CONFIRMED', 'PREPARING', 'DISPATCHED', 'IN_TRANSIT', 'DELIVERED'].includes(String(v))
 const malformed = () => new OrderError('malformed-response', 'The server returned invalid order data. Please refresh.')
 export function validateOrderId(v: unknown): number {
   if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > 2147483647) throw new OrderError('validation', 'Invalid order ID.')
@@ -74,6 +74,19 @@ export class OrderService implements AdminOrdersApi {
     if (!response.ok) {
       const error = await readBackendError(response, 'The order request could not be completed.')
       const messages: Record<string, string> = { ORDER_ALREADY_PAID: 'Paid orders cannot be cancelled. No refund has been performed.', ORDER_PAYMENT_UNRESOLVED: 'This order has a payment attempt and cannot be cancelled.', ORDER_PAYMENT_NOT_VERIFIED: 'Payment is not eligible for fulfilment. The order has been refreshed.', FULFILMENT_TRANSITION_INVALID: 'The order state changed or this action is unavailable. The order has been refreshed.', ORDER_ALREADY_DISPATCHED: 'This order has already been dispatched. Shipment details cannot be overwritten.' }
+      const blockReasons: Record<string,string> = {
+        CANCELLATION_PENDING: 'A paid cancellation request is active. Follow staged cancellation or withdraw the exact request before refund initiation.',
+        INVENTORY_DISCREPANCY: 'Inventory discrepancy: inspect the listing and record a reasoned physical stocktake.',
+        PROVIDER_DISPUTE_REVIEW_REQUIRED: 'Provider dispute: investigate verified financial evidence. Acknowledgement alone cannot release this hold.',
+        PROVIDER_REVERSAL_REVIEW_REQUIRED: 'Provider reversal: investigate the capture and refund evidence before fulfilment.',
+        PAYMENT_UNRESOLVED: 'Payment evidence is unresolved or conflicting. Reconcile and review; do not dispatch.',
+        PAYMENT_AMOUNT_MISMATCH: 'Payment amount or currency does not match the order. Investigate the payment.',
+        REFUND_IN_PROGRESS: 'Refund is pending or uncertain. Reconcile it before fulfilment.',
+        FULLY_REFUNDED: 'Payment is fully refunded. Do not dispatch; use the eligible cancellation/return workflow.',
+        REFUND_REVIEW_REQUIRED: 'Refund evidence requires review before fulfilment.',
+      }
+      const reason = error.reason ?? /\(([A-Z_]+)\)/.exec(error.message)?.[1]
+      if (reason && blockReasons[reason]) throw new OrderError('api',blockReasons[reason],reason,response.status)
       messages.SECURITY_REVIEW_REQUIRED = 'Dispatch is blocked by a payment security review. This hold cannot be released here. Wait until the review is resolved before trying again.'
       // The current Backend nests the security-review reason in its payment eligibility error.
       const securityReview = error.code === 'SECURITY_REVIEW_REQUIRED' || (error.code === 'ORDER_PAYMENT_NOT_VERIFIED' && error.message.includes('(SECURITY_REVIEW_REQUIRED)'))

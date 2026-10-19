@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { InventoryService, validateShipment } from '../electron/inventory-service'
+import { InventoryService, validateShipment, parseOutbound } from '../electron/inventory-service'
 import { FileShipmentStore } from '../electron/inventory-store'
 import { registerInventoryIpc } from '../electron/inventory-ipc'
 import type { ShipmentRequest } from '../electron/inventory-contract'
@@ -12,7 +12,7 @@ const input = { productListingId: 4, quantity: 2, shipmentReference: 'FBA-1', no
 const dirs: string[] = []
 afterEach(() => { dirs.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })) })
 function audit(request: ShipmentRequest, replayed = false) {
-  return { replayed, outbound: { ...request, id: 9, performedByUserId: 1, createdAt: timestamp, movement: { id: 8, listingId: request.productListingId, quantityChange: -request.quantity, type: 'FBA_OUTBOUND', note: request.note, performedByUserId: 1, createdAt: timestamp } }, inventory: { productListingId: request.productListingId, currentStock: 8, reservedStock: 3, availableStock: 5 } }
+  return { replayed, outbound: { ...request, appliedQuantity: request.quantity, shortfall: 0, id: 9, performedByUserId: 1, createdAt: timestamp, movement: { id: 8, listingId: request.productListingId, quantityChange: -request.quantity, type: 'FBA_OUTBOUND', note: request.note, performedByUserId: 1, createdAt: timestamp } }, inventory: { productListingId: request.productListingId, currentStock: 8, reservedStock: 3, availableStock: 5 } }
 }
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'admin-inventory-test-')); dirs.push(directory)
@@ -200,4 +200,29 @@ it('makes repeated discard idempotent without deleting a newer uncertain shipmen
   await expect(f.service.submit(next.request.idempotencyKey)).rejects.toThrow()
   await expect(f.service.finish(next.request.idempotencyKey)).rejects.toMatchObject({ code: 'conflict' })
   expect((await f.service.pending())?.request).toEqual(next.request)
+})
+
+it.each([0,1])('recovers a committed shortfall journal with applied quantity %s, original key and one safe replay', async applied => {
+  const f = fixture(), saved = await prepare(f)
+  f.store.write(`https://backend.test|1`,{request:saved.request,state:'uncertain'})
+  const result = audit(saved.request,true)
+  result.outbound.appliedQuantity=applied; result.outbound.shortfall=saved.request.quantity-applied
+  result.outbound.movement.quantityChange=-applied
+  f.authenticatedFetch.mockResolvedValueOnce(new Response(JSON.stringify(result),{status:200}))
+  const restarted = new InventoryService({restore:f.restore,authenticatedFetch:f.authenticatedFetch},new FileShipmentStore(f.directory),'https://backend.test')
+  await expect(restarted.finish(saved.request.idempotencyKey)).rejects.toThrow()
+  expect(await restarted.submit(saved.request.idempotencyKey)).toMatchObject({state:'confirmed',result:{outbound:{appliedQuantity:applied,shortfall:2-applied}}})
+  expect(JSON.parse(f.authenticatedFetch.mock.calls[0][1].body)).toEqual(saved.request)
+  await restarted.finish(saved.request.idempotencyKey)
+  expect(await restarted.pending()).toBeNull()
+  const mismatch = audit(saved.request); mismatch.outbound.shortfall=1
+  expect(()=>parseOutbound(mismatch)).toThrow()
+})
+it('reads an already-confirmed legacy full-deduction journal without requiring another shipment request',async()=>{
+ const f=fixture(),saved=await prepare(f),legacy=audit(saved.request)
+ const raw=legacy.outbound as Record<string,unknown>;delete raw.appliedQuantity;delete raw.shortfall
+ f.store.write('https://backend.test|1',{request:saved.request,state:'confirmed',result:legacy})
+ expect(await f.service.pending()).toMatchObject({state:'confirmed',result:{outbound:{appliedQuantity:2,shortfall:0}}})
+ await f.service.finish(saved.request.idempotencyKey)
+ expect(f.authenticatedFetch).not.toHaveBeenCalled()
 })

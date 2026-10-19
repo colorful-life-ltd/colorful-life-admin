@@ -222,9 +222,9 @@ const parseCatalogueArtworkResponse = (value: unknown): CatalogueArtwork => {
 }
 
 export class ProductService {
-  private readonly authService: AuthService
+  private readonly authService: Pick<AuthService, 'authenticatedFetch'>
 
-  constructor(authService: AuthService) {
+  constructor(authService: Pick<AuthService, 'authenticatedFetch'>) {
     this.authService = authService
   }
 
@@ -319,11 +319,15 @@ export class ProductService {
     const form = new FormData()
     form.append('originalPrice', input.salePrice.toFixed(2))
     form.append('damageDescription', input.damageDescription.trim())
+    if (input.sourceNewListingId !== undefined) {
+      if (!Number.isInteger(input.sourceNewListingId) || input.sourceNewListingId < 1 || !input.reasonNote || input.reasonNote.trim().length < 10) throw new ProductError('validation','Choose a source NEW listing and record conversion evidence.')
+      form.append('sourceNewListingId',String(input.sourceNewListingId)); form.append('reason','PACKAGING_DAMAGE'); form.append('reasonNote',input.reasonNote.trim())
+    }
     for (const photo of input.conditionPhotos) {
       const blob = imageBlob(photo.bytes, photo.mimeType)
       form.append('conditionPhotos', blob, photo.filename)
     }
-    const response = await this.authService.authenticatedFetch(`/products/${productId}/used-offers`, { method: 'POST', body: form })
+    const response = await this.authService.authenticatedFetch(input.sourceNewListingId === undefined ? `/products/${productId}/used-offers` : `/inventory/condition-conversions/${productId}`, { method: 'POST', body: form })
     if (!response.ok) throw await errorForResponse(response, 'used')
     const value: unknown = await response.json()
     if (!isRecord(value) || !isNumber(value.id) || !isNumber(value.legoProductId) || value.condition !== 'USED_LIKE_NEW' || !isString(value.originalPrice) || (!isString(value.salePrice) && value.salePrice !== null) || value.currentStock !== 1 || value.usedLifecycle !== 'AVAILABLE' || !isString(value.damageDescription)) {

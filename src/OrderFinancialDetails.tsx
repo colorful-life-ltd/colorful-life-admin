@@ -12,6 +12,7 @@ export default function OrderFinancialDetails({ data, warning }: { data: OrderFi
     {data?.refunds.state === 'error' && <p role="alert">{data.refunds.message}</p>}
     {data?.payment.state === 'ready' && !payment && <p>No payment recorded.</p>}
     {payment && <dl>
+      <dt>Payment ID</dt><dd>{payment.id}</dd>
       <dt>Payment provider</dt><dd>{payment.provider}</dd>
       <dt>Payment amount</dt><dd>{formatFinancialAmount(payment.amount, payment.currency)}</dd>
       <dt>Recorded payment status</dt><dd>{payment.status}</dd>
@@ -26,7 +27,7 @@ export default function OrderFinancialDetails({ data, warning }: { data: OrderFi
       Refund #{refund.id} · {formatFinancialAmount(refund.amount, refund.currency)} · Recorded status: {refund.status}<br />
       {refund.reviewRequired || (refund.status !== 'PROCESSING' && refundOutcomeUncertain(refund)) ? 'Review required — outcome must not be treated as conclusive.' : refund.status === 'PROCESSING' ? 'Pending or unresolved — no definitive outcome confirmed.' : 'Recorded terminal outcome.'}
       {refund.resolutionCode && <> Resolution: {refund.resolutionCode}.</>}<br />
-      {date(refund.createdAt)} · Admin #{refund.actorId}<br />{refund.reason ?? 'No reason recorded.'}
+      {date(refund.createdAt)} · {refund.actorId === null ? 'Provider dashboard / external' : `Admin #${refund.actorId}`}<br />{refund.reason ?? 'No reason recorded.'}
     </li>)}</ul> : <p>No refund history recorded in this read.</p>)}
     {warning && <p role="status">{warning}</p>}
     <p>Payment and refund history are separate reads and may change. Refresh order to recheck. The Backend checks payment eligibility, security holds and refund restrictions when dispatch is requested.</p>

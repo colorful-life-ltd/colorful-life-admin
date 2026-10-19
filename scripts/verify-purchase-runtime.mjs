@@ -1,5 +1,6 @@
 // Real Electron + compiled main/preload + production renderer. Only HTTP is a disposable fixture server.
 import { app } from 'electron'
+app.disableHardwareAcceleration()
 import { createServer } from 'node:http'
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -55,7 +56,7 @@ process.env.COLORFUL_LIFE_BACKEND_URL = 'http://127.0.0.1:' + server.address().p
 process.env.ELECTRON_RENDERER_URL = pathToFileURL(join(root, 'dist/index.html')).href
 let window
 const ready = new Promise(resolve => app.once('browser-window-created', (_event, win) => {
-  window = win; win.hide()
+  window = win; win.show()
   win.webContents.on('preload-error', (_event, path, error) => console.error('Preload failed', path, error))
   win.webContents.on('console-message', event => { if (event.level === 'error') console.error('Renderer:', event.message) })
   win.webContents.once('did-finish-load', resolve)

@@ -85,3 +85,12 @@ describe('order service', () => {
     for (const value of [null, 'javascript:alert(1)', 'https://evil.test', 'https://www.evri.com.evil.test/', 'https://user@www.evri.com/', 'http://www.evri.com/', 'https://www.evri.com:444/']) expect(safeTrackingUrl(value)).toBeNull()
   })
 })
+it.each(['IN_TRANSIT','DELIVERED'])('accepts Backend delivery progress %s without losing order access',async fulfilmentStage=>{
+ const value={...order,fulfilmentStage,fulfilment:{...order.fulfilment,stage:fulfilmentStage}}
+ const fetch=vi.fn().mockResolvedValue(response(value))
+ expect((await new OrderService({authenticatedFetch:fetch}).get(41)).fulfilmentStage).toBe(fulfilmentStage)
+})
+it.each(['CANCELLATION_PENDING','INVENTORY_DISCREPANCY','PROVIDER_DISPUTE_REVIEW_REQUIRED','PROVIDER_REVERSAL_REVIEW_REQUIRED','PAYMENT_UNRESOLVED','PAYMENT_AMOUNT_MISMATCH','REFUND_IN_PROGRESS','FULLY_REFUNDED'])('preserves structured fulfilment reason %s',async reason=>{
+ const fetch=vi.fn().mockResolvedValue(response({error:{code:'ORDER_PAYMENT_NOT_VERIFIED',message:'Cannot fulfil order',reason}},409))
+ await expect(new OrderService({authenticatedFetch:fetch}).preparing(41)).rejects.toMatchObject({backendCode:reason,status:409})
+})

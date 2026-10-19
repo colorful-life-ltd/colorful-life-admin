@@ -1,5 +1,5 @@
 export type OrderStatus = 'PENDING' | 'CONFIRMED' | 'DISPATCHED' | 'COMPLETED' | 'CANCELLED' | 'EXPIRED' | 'RETURNED'
-export type FulfilmentStage = 'CONFIRMED' | 'PREPARING' | 'DISPATCHED' | null
+export type FulfilmentStage = 'CONFIRMED' | 'PREPARING' | 'DISPATCHED' | 'IN_TRANSIT' | 'DELIVERED' | null
 export type Carrier = 'ROYAL_MAIL' | 'EVRI' | 'DPD' | 'OTHER'
 export const cancellationReasons = ['OUT_OF_STOCK', 'PRICING_ERROR', 'PRODUCT_UNAVAILABLE', 'FULFILMENT_ISSUE', 'OTHER'] as const
 export type CancellationReason = typeof cancellationReasons[number]
@@ -19,6 +19,7 @@ export interface OrderSummary {
   trackingNumber: string | null
 }
 export interface Shipment {
+  tracking?: {progress: 'DISPATCHED'|'IN_TRANSIT'|'DELIVERED';deliveredAt:string|null}
   sequence: number; carrier: Carrier | null; carrierName: string; trackingNumber: string | null
   dispatchedAt: string; trackingUrl: string | null; trackingUrlIncludesNumber: boolean
 }
