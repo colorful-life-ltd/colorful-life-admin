@@ -1,5 +1,6 @@
 // No Backend/database. Compile-time bridges and actual Chromium UI use this disposable HTTP fixture only.
 import { app } from 'electron'
+app.disableHardwareAcceleration()
 import { createServer } from 'node:http'
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -41,7 +42,7 @@ async function run() {
   process.env.COLORFUL_LIFE_BACKEND_URL = 'http://127.0.0.1:' + server.address().port
   process.env.ELECTRON_RENDERER_URL = pathToFileURL(join(root, 'dist/index.html')).href
   let window
-  const ready = new Promise(r => app.once('browser-window-created', (_event, win) => { window = win; win.hide(); win.webContents.once('did-finish-load', r) }))
+  const ready = new Promise(r => app.once('browser-window-created', (_event, win) => { window = win; win.show(); win.webContents.once('did-finish-load', r) }))
   const timeout = setTimeout(() => { console.error('Inventory runtime timed out'); app.exit(1) }, 45000)
   try {
     await import(pathToFileURL(join(root, 'dist-electron/main.js')).href); await ready

@@ -1,5 +1,6 @@
 // Compiled Electron main/preload and production renderer against a disposable HTTP fixture.
 import { app } from 'electron'
+app.disableHardwareAcceleration()
 import { createServer } from 'node:http'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -81,7 +82,7 @@ async function run() {
   process.env.COLORFUL_LIFE_BACKEND_URL = 'http://127.0.0.1:' + server.address().port
   process.env.ELECTRON_RENDERER_URL = pathToFileURL(join(root, 'dist/index.html')).href
   let window
-  const ready = new Promise(resolve => app.once('browser-window-created', (_event, win) => { window = win; win.hide(); win.webContents.once('did-finish-load', resolve) }))
+  const ready = new Promise(resolve => app.once('browser-window-created', (_event, win) => { window = win; win.show(); win.webContents.once('did-finish-load', resolve) }))
   const timeout = setTimeout(() => { console.error('Order runtime timed out'); app.exit(1) }, 45000)
   try {
     await import(pathToFileURL(join(root, 'dist-electron/main.js')).href)
