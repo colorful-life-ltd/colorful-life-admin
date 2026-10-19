@@ -12,6 +12,11 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Prepare Electron sandbox on the disposable runner
+        run: |
+          node node_modules/electron/install.js
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
       - run: npm run test:contracts
       - run: npm run typecheck
       - run: npx tsc -p tsconfig.electron.json --noEmit
