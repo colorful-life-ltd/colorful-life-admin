@@ -27,13 +27,18 @@
     "test:orders-runtime": "electron scripts/verify-order-runtime.mjs",
     "test:security-runtime": "electron scripts/verify-security-runtime.mjs",
     "test:development-runtime": "node scripts/verify-development-runtime.mjs",
-    "test:inventory-runtime": "electron scripts/verify-inventory-runtime.mjs"
+    "test:inventory-runtime": "electron scripts/verify-inventory-runtime.mjs",
+    "package": "npm run build && node scripts/package.mjs",
+    "verify:package": "node scripts/verify-package.mjs",
+    "test:contracts": "node scripts/verify-shared-contract.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@electron/asar": "4.3.1",
+    "@electron/packager": "20.3.0",
     "@eslint/js": "^10.0.1",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",

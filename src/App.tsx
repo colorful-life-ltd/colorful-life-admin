@@ -1,3 +1,4 @@
+import Operations from './Operations'
 import Inventory from './Inventory'
 import Orders from './Orders'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -32,7 +33,7 @@ function App() {
   const [renewalUnavailable, setRenewalUnavailable] = useState(false)
   const [presentationRefreshToken, setPresentationRefreshToken] = useState(0)
   const [presentationRefreshCategory, setPresentationRefreshCategory] = useState<number | null>(null)
-  const [section, setSection] = useState<'products' | 'edit-products' | 'categories' | 'purchases' | 'orders' | 'inventory'>('products')
+  const [section, setSection] = useState<'products' | 'edit-products' | 'categories' | 'purchases' | 'orders' | 'inventory' | 'operations'>('products')
   const expiryRef = useRef<string | null>(null)
   const sessionRevision = useRef(0)
   const renewalPending = useRef(false)
@@ -211,8 +212,8 @@ function App() {
             <div><p className="eyebrow">COLORFUL LIFE</p><div className="workspace-title"><h1>Admin workspace</h1><span className="admin-status" aria-label="Administrator access confirmed">✓</span><span className="admin-email">{user.email}</span></div></div>
             <button className="button button-secondary" type="button" onClick={() => void handleLogout()} disabled={isLoggingOut} aria-busy={isLoggingOut}>{isLoggingOut ? 'Signing out…' : 'Sign out'}</button>
           </header>
-          <nav className="workspace-nav" aria-label="Admin sections"><button className={`button ${section === 'products' ? 'button-primary' : 'button-secondary'}`} type="button" onClick={() => setSection('products')}>Products</button><button className={`button ${section === 'edit-products' ? 'button-primary' : 'button-secondary'}`} type="button" onClick={() => setSection('edit-products')}>Edit products</button><button className={`button ${section === 'categories' ? 'button-primary' : 'button-secondary'}`} type="button" onClick={() => setSection('categories')}>Categories</button><button className={`button ${section === 'purchases' ? 'button-primary' : 'button-secondary'}`} type="button" onClick={() => setSection('purchases')}>Purchases</button><button className={`button ${section === 'orders' ? 'button-primary' : 'button-secondary'}`} type="button" onClick={() => setSection('orders')}>Orders</button><button className={`button ${section === 'inventory' ? 'button-primary' : 'button-secondary'}`} type="button" onClick={() => setSection('inventory')}>Inventory</button></nav>
-          {section === 'inventory' ? <Inventory sessionBlocked={warningOpen} /> : section === 'orders' ? <Orders sessionBlocked={warningOpen} /> : section === 'edit-products' ? <ProductEditor /> : section === 'categories' ? <Categories /> : section === 'purchases' ? <Purchases /> : <div className="catalogue-workspace">
+          <nav className="workspace-nav" aria-label="Admin sections"><button className="button button-secondary" onClick={() => setSection('operations')}>Operator workflows</button><button className={`button ${section === 'products' ? 'button-primary' : 'button-secondary'}`} type="button" onClick={() => setSection('products')}>Products</button><button className={`button ${section === 'edit-products' ? 'button-primary' : 'button-secondary'}`} type="button" onClick={() => setSection('edit-products')}>Edit products</button><button className={`button ${section === 'categories' ? 'button-primary' : 'button-secondary'}`} type="button" onClick={() => setSection('categories')}>Categories</button><button className={`button ${section === 'purchases' ? 'button-primary' : 'button-secondary'}`} type="button" onClick={() => setSection('purchases')}>Purchases</button><button className={`button ${section === 'orders' ? 'button-primary' : 'button-secondary'}`} type="button" onClick={() => setSection('orders')}>Orders</button><button className={`button ${section === 'operations' ? <Operations sessionBlocked={warningOpen} /> : section === 'inventory' ? 'button-primary' : 'button-secondary'}`} type="button" onClick={() => setSection('inventory')}>Inventory</button></nav>
+          {section === 'operations' ? <Operations sessionBlocked={warningOpen} /> : section === 'inventory' ? <Inventory sessionBlocked={warningOpen} /> : section === 'orders' ? <Orders sessionBlocked={warningOpen} /> : section === 'edit-products' ? <ProductEditor /> : section === 'categories' ? <Categories /> : section === 'purchases' ? <Purchases /> : <div className="catalogue-workspace">
             <AddProduct onProductCreated={handleProductCreated} onUsedOfferCreated={handleUsedOfferCreated} />
             <CataloguePresentation refreshToken={presentationRefreshToken} refreshCategory={presentationRefreshCategory} />
           </div>}

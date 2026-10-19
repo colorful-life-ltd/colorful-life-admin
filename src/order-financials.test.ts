@@ -49,7 +49,7 @@ it.each([
 })
 it.each([
   { ...refund, orderId: 42 }, { ...refund, amount: '0' }, { ...refund, status: 'UNKNOWN' },
-  { ...refund, performedByUserId: null }, { ...refund, reviewRequired: 'false' }, { ...refund, createdAt: 'bad' },
+  { ...refund, performedByUserId: undefined }, { ...refund, reviewRequired: 'false' }, { ...refund, createdAt: 'bad' },
 ])('rejects malformed refund response', row => { expect(() => parseRefunds([row], 41)).toThrow() })
 it('rejects duplicate IDs and unexpected collection shapes', () => {
   expect(() => parsePayments([payment, payment], 41)).toThrow()
@@ -101,4 +101,11 @@ it('preserves a successful refund read when Main transport raises AuthError(netw
 it('shows review requirements even while the refund is still processing', () => {
   const data = view({ ...payment, reservedRefundAmount: '5' }, [{ ...refund, status: 'PROCESSING', reviewRequired: true, resolutionCode: 'MANUAL_REVIEW_REQUIRED' }])
   expect(dispatchFinancialWarning(data)).toContain('requires review')
+})
+
+it('accepts the Backend external-refund null actor and permits a finalized partial refund', () => {
+  const rows = [{ ...refund, performedByUserId: null }]
+  expect(parseRefunds(rows,41)[0].actorId).toBeNull()
+  expect(dispatchFinancialWarning(view({ ...payment,refundedAmount:refund.amount },rows))).toBeNull()
+  for (const actor of [0,-1,'2',{},undefined]) expect(()=>parseRefunds([{...refund,performedByUserId:actor}],41)).toThrow()
 })

@@ -173,6 +173,8 @@ export interface UsedConditionPhoto {
 }
 
 export interface UsedOfferCreateInput {
+  sourceNewListingId?: number
+  reasonNote?: string
   salePrice: number
   damageDescription: string
   conditionPhotos: UsedConditionPhoto[]

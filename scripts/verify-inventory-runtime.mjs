@@ -28,7 +28,7 @@ async function run() {
       posts.push(body)
       if (!recorded) {
         currentStock -= body.quantity; deductions++
-        recorded = { outbound: { ...body, id: 9, performedByUserId: 1, createdAt: timestamp, movement: { id: 8, listingId: 4, type: 'FBA_OUTBOUND', quantityChange: -body.quantity, note: body.note, performedByUserId: 1, createdAt: timestamp } }, inventory: { productListingId: 4, currentStock, reservedStock: 3, availableStock: currentStock - 3 } }
+        recorded = { outbound: { ...body, appliedQuantity: body.quantity, shortfall: 0, id: 9, performedByUserId: 1, createdAt: timestamp, movement: { id: 8, listingId: 4, type: 'FBA_OUTBOUND', quantityChange: -body.quantity, note: body.note, performedByUserId: 1, createdAt: timestamp } }, inventory: { productListingId: 4, currentStock, reservedStock: 3, availableStock: currentStock - 3 } }
         // Commit succeeded, response was lost. The next submission must replay this exact key/payload.
         req.socket.destroy(); return
       }

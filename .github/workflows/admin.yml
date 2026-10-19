@@ -1,0 +1,33 @@
+name: Admin integration
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run test:contracts
+      - run: npm run typecheck
+      - run: npx tsc -p tsconfig.electron.json --noEmit
+      - run: npm run lint
+      - run: npm run test:unit
+      - run: npm run build
+      - run: npm run test:electron-boundary
+      - run: xvfb-run -a npm run test:electron-runtime
+      - run: xvfb-run -a npm run test:orders-runtime
+      - run: xvfb-run -a npm run test:inventory-runtime
+      - run: xvfb-run -a npm run test:security-runtime
+      - run: npm run test:development-runtime
+      - run: npm run package
+      - run: npm run verify:package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: colorful-life-admin-linux-x64-unsigned
+          path: release/
+          if-no-files-found: error

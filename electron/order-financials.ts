@@ -7,7 +7,7 @@ export interface PaymentView {
 export interface RefundView {
   id: number; paymentId: number; amount: string; currency: string; provider: string
   status: 'SUCCEEDED' | 'FAILED' | 'PROCESSING'; createdAt: string
-  reason: string | null; actorId: number; resolutionCode: string | null; reviewRequired: boolean
+  reason: string | null; actorId: number | null; resolutionCode: string | null; reviewRequired: boolean
 }
 export type FinancialRead<T> = { state: 'ready'; value: T } | { state: 'error'; message: string }
 export interface OrderFinancials {
@@ -66,7 +66,7 @@ export function parseRefunds(value: unknown, orderId: number): RefundView[] {
   return value.map((r: unknown) => {
     if (!object(r) || !id(r.id) || seen.has(r.id) || r.orderId !== orderId || !id(r.paymentId) || typeof r.currency !== 'string' || !provider(r.provider)
       || typeof r.status !== 'string' || !['SUCCEEDED', 'FAILED', 'PROCESSING'].includes(r.status) || !timestamp(r.createdAt) || !nullableText(r.reason)
-      || !id(r.performedByUserId) || !nullableText(r.resolutionCode) || typeof r.reviewRequired !== 'boolean') return invalid()
+      || !(r.performedByUserId === null || id(r.performedByUserId)) || !nullableText(r.resolutionCode) || typeof r.reviewRequired !== 'boolean') return invalid()
     seen.add(r.id)
     const result: RefundView = { id: r.id, paymentId: r.paymentId, amount: amount(r.amount, r.currency), currency: r.currency, provider: r.provider,
       status: r.status as RefundView['status'], createdAt: r.createdAt, reason: r.reason, actorId: r.performedByUserId, resolutionCode: r.resolutionCode, reviewRequired: r.reviewRequired }

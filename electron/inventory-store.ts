@@ -6,7 +6,7 @@ import type { PendingShipment } from './inventory-contract.js'
 export interface ShipmentStore { read(scope: string): unknown; write(scope: string, value: PendingShipment | null): void }
 type JournalIO = Pick<typeof fs, 'mkdirSync' | 'readFileSync' | 'renameSync' | 'writeFileSync' | 'existsSync' | 'openSync' | 'fsyncSync' | 'closeSync'>
 /** Main-only retry journal. Durability depends on filesystem/platform flush support. */
-export class FileShipmentStore implements ShipmentStore {
+export class FileJournal<T = PendingShipment> {
   private readonly directory: string
   private readonly claimWriter: () => boolean
   private readonly io: JournalIO
@@ -31,7 +31,7 @@ export class FileShipmentStore implements ShipmentStore {
       if (!(this.platform === 'win32' && ['EPERM', 'EACCES', 'EISDIR', 'EINVAL', 'ENOTSUP', 'EBADF'].includes(code ?? ''))) throw error
     } finally { if (fd !== undefined) this.io.closeSync(fd) }
   }
-  write(scope: string, value: PendingShipment | null) {
+  write(scope: string, value: T | null) {
     if (!this.claimWriter()) throw Object.assign(new Error('Another Admin process owns the shipment journal'), { code: 'INVENTORY_INSTANCE_BUSY' })
     const created = !this.io.existsSync(this.directory)
     this.io.mkdirSync(this.directory, { recursive: true, mode: 0o700 })
@@ -47,3 +47,5 @@ export class FileShipmentStore implements ShipmentStore {
     // Failures leave the old/new journal and possibly temporary evidence; never auto-recover it.
   }
 }
+
+export class FileShipmentStore extends FileJournal<PendingShipment> implements ShipmentStore {}

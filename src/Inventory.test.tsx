@@ -6,7 +6,7 @@ import { InventoryError } from '../electron/inventory-service'
 import { serializeIpcError } from '../electron/ipc-error-contract'
 const input = { productListingId: 4, quantity: 2, shipmentReference: 'FBA-123', note: 'Home stock' }
 const saved: PendingShipment = { request: { ...input, idempotencyKey: 'stable-key' }, state: 'prepared' }
-const confirmed: PendingShipment = { ...saved, state: 'confirmed', result: { replayed: false, inventory: { productListingId: 4, currentStock: 8, reservedStock: 3, availableStock: 5 }, outbound: { ...saved.request, id: 9, performedByUserId: 1, createdAt: '2026-10-18T12:00:00Z', movement: { id: 8, listingId: 4, type: 'FBA_OUTBOUND', quantityChange: -2, note: 'Home stock', performedByUserId: 1, createdAt: '2026-10-18T12:00:00Z' } } } }
+const confirmed: PendingShipment = { ...saved, state: 'confirmed', result: { replayed: false, inventory: { productListingId: 4, currentStock: 8, reservedStock: 3, availableStock: 5 }, outbound: { ...saved.request, appliedQuantity: saved.request.quantity, shortfall: 0, id: 9, performedByUserId: 1, createdAt: '2026-10-18T12:00:00Z', movement: { id: 8, listingId: 4, type: 'FBA_OUTBOUND', quantityChange: -2, note: 'Home stock', performedByUserId: 1, createdAt: '2026-10-18T12:00:00Z' } } } }
 beforeEach(() => {
   window.adminInventory = {
     list: vi.fn().mockResolvedValue({ items: [{ productListingId: 4, productId: 2, setNumber: '12345', title: 'Test car', condition: 'NEW', active: true, currentStock: 10, reservedStock: 3, availableStock: 7 }], pagination: { page: 1, pageSize: 20, totalItems: 1, totalPages: 1 } }),

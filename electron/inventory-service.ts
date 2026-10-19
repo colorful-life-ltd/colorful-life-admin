@@ -40,7 +40,7 @@ export function parseOutbound(v: unknown): OutboundAudit {
   const o = v.outbound
   validateShipment({ productListingId: o.productListingId, quantity: o.quantity, shipmentReference: o.shipmentReference, note: o.note }); shipmentKey(o.idempotencyKey)
   const m = movement(o.movement), q = quantities(v.inventory)
-  if (m.type !== 'FBA_OUTBOUND' || m.quantityChange !== -Number(o.quantity) || m.listingId !== o.productListingId || m.performedByUserId !== o.performedByUserId || m.note !== o.note || m.createdAt !== o.createdAt || q.productListingId !== o.productListingId) throw malformed()
+  if (!integer(o.appliedQuantity) || !integer(o.shortfall) || o.quantity !== o.appliedQuantity + o.shortfall || m.type !== 'FBA_OUTBOUND' || m.quantityChange !== -o.appliedQuantity || m.listingId !== o.productListingId || m.performedByUserId !== o.performedByUserId || m.note !== o.note || m.createdAt !== o.createdAt || q.productListingId !== o.productListingId) throw malformed()
   return { outbound: o as unknown as OutboundAudit['outbound'], inventory: q }
 }
 function parsePending(v: unknown): PendingShipment | null {
@@ -49,8 +49,15 @@ function parsePending(v: unknown): PendingShipment | null {
   const { idempotencyKey, ...input } = v.request
   validateShipment(input); shipmentKey(idempotencyKey)
   if (v.state === 'confirmed') {
-    const audit = parseOutbound(v.result)
+    // Upgrade only an already-confirmed legacy local journal. Network receipts
+    // must carry the new fields. Legacy full deduction is independently checked.
+    const result = record(v.result) ? { ...v.result } : v.result
+    if (record(result) && record(result.outbound) && result.outbound.appliedQuantity === undefined && result.outbound.shortfall === undefined) {
+      result.outbound = { ...result.outbound, appliedQuantity: result.outbound.quantity, shortfall: 0 }
+    }
+    const audit = parseOutbound(result)
     if (!record(v.result) || typeof v.result.replayed !== 'boolean' || !matches(audit, v.request)) throw malformed()
+    return { ...v, result: { ...audit, replayed: v.result.replayed } } as unknown as PendingShipment
   } else if (v.result !== undefined) throw malformed()
   return v as unknown as PendingShipment
 }
@@ -100,7 +107,8 @@ export class InventoryService implements AdminInventoryApi {
     if (p.page !== page || p.pageSize !== 20 || !integer(p.totalItems) || !integer(p.totalPages) || p.totalPages !== Math.ceil(p.totalItems / 20) || value.items.length > 20) throw malformed()
     const items: InventoryListing[] = value.items.map(v => {
       if (!record(v) || !positive(v.id) || !integer(v.currentStock) || !integer(v.availableStock) || v.availableStock > v.currentStock || !['NEW', 'USED_LIKE_NEW'].includes(String(v.condition)) || typeof v.active !== 'boolean' || !record(v.legoProduct) || !positive(v.legoProduct.id) || !text(v.legoProduct.setNumber) || !text(v.legoProduct.title)) throw malformed()
-      return { productListingId: v.id, productId: v.legoProduct.id, setNumber: v.legoProduct.setNumber, title: v.legoProduct.title, condition: v.condition as InventoryListing['condition'], active: v.active, currentStock: v.currentStock, availableStock: v.availableStock, reservedStock: v.currentStock - v.availableStock }
+      if (v.discrepancies !== undefined && (!Array.isArray(v.discrepancies) || !v.discrepancies.every(d => record(d) && positive(d.id) && positive(d.quantity) && integer(d.appliedQuantity) && positive(d.shortfall) && d.quantity === d.appliedQuantity+d.shortfall && text(d.shipmentReference)))) throw malformed()
+      return { discrepancies: v.discrepancies as InventoryListing['discrepancies'], productListingId: v.id, productId: v.legoProduct.id, setNumber: v.legoProduct.setNumber, title: v.legoProduct.title, condition: v.condition as InventoryListing['condition'], active: v.active, currentStock: v.currentStock, availableStock: v.availableStock, reservedStock: v.currentStock - v.availableStock }
     })
     return { items, pagination: p as unknown as InventoryPage['pagination'] }
   }
