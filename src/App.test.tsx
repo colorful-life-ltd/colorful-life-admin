@@ -1,3 +1,5 @@
+import {returnCase,returnQueue} from './test-fixtures/returns'
+import {order,orderPage,financials} from './test-fixtures/order'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
@@ -36,6 +38,23 @@ describe('App authentication flow', () => {
       createUsedOffer: vi.fn(),
     }
     window.adminCategories = { list: vi.fn().mockResolvedValue([{ id: 4, name: 'City', subtitle: null, description: null, imageUrl: null, imagePublicId: null, thumbnailUrl: null, thumbnailPublicId: null }]), getProductAvailability: vi.fn().mockResolvedValue({ totalProducts: 0, totalInventory: 0, activeProducts: 0, inactiveProducts: 0 }), create: vi.fn(), update: vi.fn(), uploadArtwork: vi.fn(), removeArtwork: vi.fn(), uploadThumbnailArtwork: vi.fn(), removeThumbnailArtwork: vi.fn() }
+  })
+
+  it('opens Returns and navigates to the exact original order and back through the real workspace', async()=>{
+    window.adminAuth.restore=vi.fn().mockResolvedValue(adminSession)
+    window.adminReturns={list:vi.fn().mockResolvedValue(returnQueue),get:vi.fn().mockResolvedValue(returnCase),action:vi.fn()}
+    window.adminOrders={list:vi.fn().mockResolvedValue(orderPage),get:vi.fn().mockResolvedValue(order),financials:vi.fn().mockResolvedValue(financials),preparing:vi.fn(),dispatch:vi.fn(),cancel:vi.fn()}
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button',{name:'Returns'}))
+    fireEvent.click(await screen.findByRole('button',{name:/BB-R-41/}))
+    fireEvent.click(await screen.findByRole('button',{name:'View Original Order'}))
+    expect(await screen.findByText(/1 Test Street/)).toBeInTheDocument()
+    expect(window.adminOrders.get).toHaveBeenCalledWith(41)
+    expect(window.adminOrders.list).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button',{name:'View Returns'}))
+    expect(await screen.findByRole('heading',{name:'Returns · BB-R-41'})).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button',{name:'Back to Returns'}))
+    expect(await screen.findByLabelText('Return status filter')).toHaveValue('REQUESTED')
   })
 
   it('shows the unauthenticated login screen and submits credentials', async () => {

@@ -1,3 +1,4 @@
+import type { AdminReturnsApi } from './return-service.js'
 import type { AdminOperationsApi } from './operations-contract.js'
 import type { AdminInventoryApi } from './inventory-contract.js'
 import type { AdminOrdersApi } from './order-contract.js'
@@ -119,3 +120,6 @@ const adminOperations: AdminOperationsApi = {
   resolve: (operation,input,decision,note) => forwardIpcResult(ipcRenderer.invoke('admin-operations:resolve',operation,input,decision,note)),
 }
 contextBridge.exposeInMainWorld('adminOperations',adminOperations)
+
+const adminReturns:AdminReturnsApi={list:(status,page)=>forwardIpcResult(ipcRenderer.invoke('admin-returns:list',status,page)),get:(id)=>forwardIpcResult(ipcRenderer.invoke('admin-returns:get',id)),action:(id,lineId,action,body)=>forwardIpcResult(ipcRenderer.invoke('admin-returns:action',id,lineId,action,body))}
+contextBridge.exposeInMainWorld('adminReturns',adminReturns)

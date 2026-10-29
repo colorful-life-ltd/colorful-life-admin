@@ -1,3 +1,5 @@
+import { registerReturnIpc } from './return-ipc.js'
+import { ReturnService } from './return-service.js'
 import { registerOperationsIpc } from './operations-ipc.js'
 import { OperationsService } from './operations-service.js'
 import { FileJournal } from './inventory-store.js'
@@ -46,6 +48,7 @@ const handleIpc = <Arguments extends unknown[], Result>(
 registerOperationsIpc(handleIpc, new OperationsService(authService, new FileJournal<OperationJournal | SavedOperation>(join(app.getPath('userData'), 'operator-intents'), () => app.requestSingleInstanceLock()), backendUrl))
 
 registerOrderIpc(handleIpc, new OrderService(authService))
+registerReturnIpc(handleIpc, new ReturnService(authService))
 registerInventoryIpc(handleIpc, new InventoryService(authService, new FileShipmentStore(join(app.getPath('userData'), 'inventory-shipments'), () => app.requestSingleInstanceLock()), backendUrl))
 
 const isLoginCredentials = (value: unknown): value is LoginCredentials =>

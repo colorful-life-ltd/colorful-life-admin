@@ -58,3 +58,14 @@ it('validates the IPC boundary and registers no arbitrary URL operation',()=>{
  expect(()=>handlers.get('admin-operations:execute')!({},'refund',{...input,amount:'5'})).toThrow()
  expect(f.authenticatedFetch).not.toHaveBeenCalled()
 })
+
+it('retires legacy return execution without sending or discarding saved evidence',async()=>{
+ const f=fixture()
+ const legacy:SavedOperation={operation:'authorizeReturn',input:{orderId:41,returnId:10},key:'12345678-1234-1234-1234-123456789abc',state:'uncertain'}
+ f.store.write('https://backend.test|2',{version:2,intents:[legacy]});f.store.write.mockClear()
+ expect(await f.service.pending()).toEqual([legacy])
+ for(const op of ['requestReturn','authorizeReturn','receiveReturn','inspectReturn','completeReturn','cancelReturn'] as const)await expect(f.service.execute(op,{orderId:41,returnId:10})).rejects.toThrow('Returns workspace')
+ expect(f.store.write).not.toHaveBeenCalled()
+ expect(f.authenticatedFetch).not.toHaveBeenCalled()
+ expect(await f.service.pending()).toEqual([legacy])
+})

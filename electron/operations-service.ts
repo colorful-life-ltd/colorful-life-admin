@@ -127,7 +127,9 @@ export class OperationsService implements AdminOperationsApi {
     return this.request(op,input)
   }
   async execute(op: Operation, raw: OperatorInput) {
-    const spec = operationSpec(op), input = validateOperationInput(op,raw)
+    const spec = operationSpec(op)
+    if(spec.retired)return invalid('Use the Returns workspace for return actions. Existing saved return intents are preserved for investigation; no request was sent.')
+    const input = validateOperationInput(op,raw)
     if (spec.method === 'GET') return invalid()
     return this.exclusive(async () => {
       const scope = await this.scope(), intents = this.load(scope), slot = intentSlot(op, input)

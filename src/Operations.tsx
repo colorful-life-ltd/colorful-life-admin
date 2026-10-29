@@ -14,7 +14,7 @@ function Result({ value }: { value: SafeValue }) {
   if (typeof value === 'object') return <dl>{Object.entries(value).map(([k,v]) => <div key={k}><dt>{label(k)}</dt><dd><Result value={v} /></dd></div>)}</dl>
   return <span>{typeof value === 'boolean' ? value ? 'Yes' : 'No' : String(value)}</span>
 }
-export default function Operations({ sessionBlocked = false, orderId, listingId }: { sessionBlocked?: boolean; orderId?: number; listingId?: number }) {
+export default function Operations({ sessionBlocked = false, orderId, listingId, onViewReturns }: { sessionBlocked?: boolean; orderId?: number; listingId?: number; onViewReturns?:(orderId:number)=>void }) {
   const [op,setOp] = useState<Operation>(orderId ? 'audit' : listingId ? 'inventory' : 'audit')
   const [values,setValues] = useState<Record<string,string>>({orderId:String(orderId ?? ''),productListingId:String(listingId ?? ''),page:'1',afterId:'0'})
   const [saved,setSaved] = useState<SavedOperation[]>([]), [result,setResult] = useState<SafeValue|null>(null)
@@ -37,7 +37,7 @@ export default function Operations({ sessionBlocked = false, orderId, listingId 
     catch (e) { setError(message(e)) }
     finally { await refreshSaved(); lock.current = false; setBusy(false) }
   }
-  function restore(s: SavedOperation) { setOp(s.operation); setValues(Object.fromEntries(Object.entries(s.input).map(([k,v]) => [k,Array.isArray(v) ? v.join('\n') : v === null ? '' : String(v)]))); setConfirm(false); setError('') }
+  function restore(s: SavedOperation) { if((operations[s.operation] as OperationSpec).retired){setError('Use the Returns workspace; the saved legacy intent remains available for investigation.');return} setOp(s.operation); setValues(Object.fromEntries(Object.entries(s.input).map(([k,v]) => [k,Array.isArray(v) ? v.join('\n') : v === null ? '' : String(v)]))); setConfirm(false); setError('') }
   const run = async () => {
     if (lock.current || sessionBlocked) return
     const input: OperatorInput = {}
@@ -67,10 +67,13 @@ export default function Operations({ sessionBlocked = false, orderId, listingId 
   }
   return <section aria-label="Operator workflows">
     <h2>Operator workflows</h2>
+    <p>Manage returns in the Returns workspace, where the original order and return instructions are shown before each action.</p>
     <p>Paid cancellation is staged: request intent → chosen refund → cancel/restock after full finality. Reads do not release holds. Refresh authoritative history after every change.</p>
     {saved.length > 0 && <aside aria-label="Saved operator intents"><h3>Saved intents</h3><p>Each saved intent blocks only the same operation on the same target.</p><ul>{saved.map(s => <li key={s.key}>
       <p role="status">Saved {operations[s.operation].label}{target(s) && ` (${target(s)})`}: {s.state}. {s.state === 'uncertain' && ((operations[s.operation] as OperationSpec).replaySafe ? 'Retry with the same saved intent; do not create a replacement request.' : 'Investigate authoritative history, then record whether it was applied.')}</p>
-      <button disabled={busy || sessionBlocked} onClick={() => restore(s)}>Load saved intent</button>
+      {!(operations[s.operation] as OperationSpec).retired && <button disabled={busy || sessionBlocked} onClick={() => restore(s)}>Load saved intent</button>}
+      {(operations[s.operation] as OperationSpec).retired && <p>Legacy return intent retained. Inspect the case in Returns before recording the investigated outcome.</p>}
+      {(operations[s.operation] as OperationSpec).retired && onViewReturns && typeof s.input.orderId==='number' && <button disabled={busy||sessionBlocked} onClick={()=>onViewReturns(Number(s.input.orderId))}>View Returns</button>}
       {s.state !== 'uncertain' && <button disabled={busy || sessionBlocked} onClick={() => { void adminOperations.finish(s.operation,s.input).then(refreshSaved,e => setError(message(e))) }}>Finish saved action</button>}
       {s.state === 'uncertain' && !(operations[s.operation] as OperationSpec).replaySafe && <button disabled={busy || sessionBlocked} onClick={() => { setInvestigating(s); setDecision(''); setNote(''); setError('') }}>Record investigated outcome</button>}
     </li>)}</ul></aside>}
@@ -80,7 +83,7 @@ export default function Operations({ sessionBlocked = false, orderId, listingId 
       <label>Investigation evidence (at least 10 characters)<textarea required value={note} onChange={e => setNote(e.target.value)} /></label>
       <button type="submit" disabled={!decision || note.trim().length < 10}>Record outcome and clear intent</button><button type="button" onClick={() => setInvestigating(null)}>Cancel</button>
     </fieldset></form>}
-    <label>Workflow<select disabled={busy} value={op} onChange={e => {setOp(e.target.value as Operation);setConfirm(false);setResult(null);setError('')}}>{(['Orders','Inventory','Products','Reviews'] as const).map(group => <optgroup key={group} label={group}>{(Object.entries(operations) as [Operation,OperationSpec][]).filter(([,s])=>s.group===group).map(([key,s]) => <option key={key} value={key}>{s.label}</option>)}</optgroup>)}</select></label>
+    <label>Workflow<select disabled={busy} value={op} onChange={e => {setOp(e.target.value as Operation);setConfirm(false);setResult(null);setError('')}}>{(['Orders','Inventory','Products','Reviews'] as const).map(group => <optgroup key={group} label={group}>{(Object.entries(operations) as [Operation,OperationSpec][]).filter(([,s])=>s.group===group&&!s.retired).map(([key,s]) => <option key={key} value={key}>{s.label}</option>)}</optgroup>)}</select></label>
     {spec.help && <p>{spec.help}</p>}
     <form onSubmit={e => {e.preventDefault();void run()}}><fieldset disabled={busy || sessionBlocked}>
       {spec.fields.map(f => <label key={f.name}>{f.label}{f.options || f.type === 'boolean' ? <select required={!f.optional && (f.choose || f.type === 'boolean')} value={values[f.name] ?? choices(f)[0]} onChange={e=>{setValues(v=>({...v,[f.name]:e.target.value}));setConfirm(false)}}>{choices(f).map(v=><option key={v} value={v}>{choiceLabel(f,v)}</option>)}</select> : f.type === 'references' ? <textarea required value={values[f.name] ?? ''} onChange={e=>{setValues(v=>({...v,[f.name]:e.target.value}));setConfirm(false)}} /> : <input required={!f.optional} type={['id','integer','money'].includes(f.type) ? 'number' : 'text'} min={f.type==='integer' ? 0 : f.type==='money' ? 0.01 : f.type==='id' ? 1 : undefined} step={f.type==='money' ? '0.01' : 1} minLength={f.type==='reason' ? 10 : undefined} maxLength={1000} value={values[f.name] ?? ''} onChange={e=>{setValues(v=>({...v,[f.name]:e.target.value}));setConfirm(false)}} />}</label>)}
