@@ -37,3 +37,5 @@ export const adminInventory = errorAwareBridge(() => window.adminInventory)
 export const adminOperations = errorAwareBridge(() => window.adminOperations)
 
 export const adminReturns=errorAwareBridge(()=>window.adminReturns)
+
+export const adminConnection = errorAwareBridge(() => window.adminConnection)

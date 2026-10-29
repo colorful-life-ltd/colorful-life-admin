@@ -35,3 +35,15 @@ jobs:
           name: colorful-life-admin-linux-x64-unsigned
           path: release/
           if-no-files-found: error
+  windows-ssm-ownership:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build:electron
+      - name: Verify native Job Object cleanup without AWS or Backend access
+        run: node scripts/verify-ssm-windows.mjs

@@ -167,3 +167,65 @@ not introduce a new dispatch prohibition. Backend payment/security/inventory
 checks remain authoritative, including when financial state changes after a read.
 Recorded refund status is displayed separately from uncertainty/review metadata.
 This screen cannot execute/reconcile refunds, release holds or change payments.
+
+## Automatic remote Sandbox connection (Windows Electron)
+
+Install AWS CLI v2 and Session Manager Plugin once, and configure the existing
+`colorful-life-admin` AWS profile using the AWS CLI credential chain. Admin does
+not save access keys or tokens. Administrator account permissions are separate
+from tunnel connectivity; a Connected tunnel does not grant administrator access.
+
+From the existing Windows checkout after pulling main:
+
+```powershell
+npm ci
+npm run build
+npm run electron:sandbox
+```
+
+For development with hot reload, use `npm run dev:sandbox`. Both commands select
+`remote-sandbox` mode and automatically establish the tunnel, without a separate
+PowerShell window or manual SSM command. For a packaged executable, set the user
+environment variable `COLORFUL_LIFE_CONNECTION_MODE=remote-sandbox` once before
+launching it. Ordinary `npm run dev` / `npm run electron` retain direct/local mode.
+
+Configuration uses the existing process environment convention:
+
+| Variable | Remote Sandbox default |
+| --- | --- |
+| `COLORFUL_LIFE_CONNECTION_MODE` | `direct`; explicitly select `remote-sandbox` |
+| `COLORFUL_LIFE_BACKEND_URL` | `http://localhost:3000` (derived from local port if unset) |
+| `COLORFUL_LIFE_AWS_PROFILE` | `colorful-life-admin` |
+| `COLORFUL_LIFE_AWS_REGION` | `eu-west-2` |
+| `COLORFUL_LIFE_SSM_INSTANCE` | `i-02b28336518077a8f` |
+| `COLORFUL_LIFE_SSM_REMOTE_PORT` | `3001` |
+| `COLORFUL_LIFE_SSM_LOCAL_PORT` | `3000` |
+| `COLORFUL_LIFE_AWS_CLI_PATH` | optional absolute executable path |
+| `COLORFUL_LIFE_SSM_PLUGIN_PATH` | optional absolute executable path |
+
+The installed Windows plugin is discovered under
+`C:\Program Files\Amazon\SessionManagerPlugin\bin`; its directory is added only
+to the spawned process environment. No system PATH edit is required. Remote mode
+rejects a Backend URL that does not match the configured loopback port.
+
+Login remains disabled while Connecting. Connected requires the owned plugin's
+port-open acknowledgement and successful Backend `/health` and `/ready` responses.
+Failure is shown with a Retry Connection button; retries are explicit, not endless.
+Refresh expired AWS credentials outside Admin, then retry. If port 3000 is occupied,
+close the old manual tunnel yourself or configure another local port. Admin never
+adopts or kills an existing listener or unrelated AWS session.
+
+Windows uses a hidden PowerShell Job Object supervisor to contain the directly
+spawned AWS CLI and plugin descendants. Closing Admin (or an application crash)
+closes the supervisor's job. PowerShell must be permitted to run the bundled
+helper; its per-process execution-policy argument does not change system policy.
+Failure to establish process ownership blocks connection. The helper is unpacked
+alongside packaged application assets, rather than executed inside ASAR.
+
+Windows acceptance checks (no customer/order changes): start in Sandbox mode,
+observe Connecting then Connected, confirm login can reach the Backend, close the
+app and confirm its tunnel exits. Reopen, interrupt only its own tunnel, and use
+Retry Connection. Verify an unrelated manual tunnel is left alone; an occupied
+port must produce Connection Failed. A role-denied login is an account issue,
+not a tunnel failure. CI validates process ownership with synthetic Windows
+processes, without AWS calls, credentials, customer emails or payment operations.
