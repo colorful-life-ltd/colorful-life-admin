@@ -89,3 +89,18 @@ it('offers an audited investigated outcome only for uncertain non-replayable int
  await waitFor(()=>expect(resolve).toHaveBeenCalledWith('securityReview',{orderId:41,action:'RELEASE',note:'Mistyped order identifier'},'NOT_APPLIED','Order audit shows no security event'))
  expect(api.execute).not.toHaveBeenCalled()
 })
+
+it('removes legacy manual-ID return controls from the active workflow menu',()=>{
+ render(<Operations orderId={41}/> )
+ const select=screen.getByLabelText<HTMLSelectElement>('Workflow')
+ expect([...select.options].some(option=>['requestReturn','authorizeReturn','receiveReturn','inspectReturn','completeReturn','cancelReturn'].includes(option.value))).toBe(false)
+ expect(screen.getByText(/Manage returns in the Returns workspace/)).toBeInTheDocument()
+})
+
+it('preserves a legacy return intent for investigation and links directly to its case',async()=>{
+ const legacy={operation:'authorizeReturn',input:{orderId:41,returnId:10},key:'12345678-1234-1234-1234-123456789abc',state:'uncertain'}
+ api.pending.mockResolvedValue([legacy]);const open=vi.fn();render(<Operations onViewReturns={open}/>)
+ expect(await screen.findByText(/Legacy return intent retained/)).toBeInTheDocument()
+ expect(screen.queryByRole('button',{name:'Load saved intent'})).not.toBeInTheDocument()
+ fireEvent.click(screen.getByRole('button',{name:'View Returns'}));expect(open).toHaveBeenCalledWith(41);expect(api.execute).not.toHaveBeenCalled();expect(api.finish).not.toHaveBeenCalled()
+})

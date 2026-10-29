@@ -47,3 +47,5 @@ No payment-provider behaviour, production records, infrastructure or live config
 ## Independent-review correction
 
 Claude Opus's initial read-only review requested that failed return actions announce their error inside the active native modal (outside content is inert while `showModal()` is active). The error is now passed into the decision form, with a regression asserting the alert within the open dialog. Full Admin verification passes with 541 unit/UI tests plus native runtime/security journeys. Final-head independent re-review is required before leaving Draft.
+
+The second Opus review identified obsolete return actions in Operator workflows. Those six specs are now retired from the active menu and execution path; return actions use the dedicated workspace. Their descriptors remain solely for validating and showing old saved intents, which are preserved for investigation rather than discarded or blindly retried. A retained intent links directly to its return case. Regression tests verify no retired endpoint is sent and no saved evidence is changed. Non-return operations and financial intent handling are unchanged.
