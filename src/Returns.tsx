@@ -119,7 +119,7 @@ export default function Returns({
           Refresh
         </button>
       </header>
-      {error && <p role="alert">{error}</p>}
+      {error && !selection && <p role="alert">{error}</p>}
       {loading && <p role="status">Loading returns…</p>}
       {navigation.orderId === null && (
         <label>
@@ -312,9 +312,10 @@ export default function Returns({
                         className={`button ${action === 'authorize' || action === 'receive' ? 'button-primary' : 'button-secondary'}`}
                         disabled={pending || sessionBlocked}
                         key={action}
-                        onClick={() =>
+                        onClick={() => {
+                          setError('')
                           setSelection({ line, action: action as ReturnAction })
-                        }
+                        }}
                       >
                         {action === 'receive'
                           ? 'Confirm Received'
@@ -335,6 +336,7 @@ export default function Returns({
           action={selection.action}
           detail={detail}
           pending={pending}
+          error={error}
           onSubmit={submit}
           onClose={() => setSelection(null)}
         />
@@ -379,6 +381,7 @@ function ReturnDecision({
   action,
   detail,
   pending,
+  error,
   onSubmit,
   onClose,
 }: {
@@ -386,6 +389,7 @@ function ReturnDecision({
   action: ReturnAction
   detail: ReturnCaseView
   pending: boolean
+  error: string
   onSubmit: (body: Record<string, unknown>) => Promise<void>
   onClose: () => void
 }) {
@@ -453,6 +457,7 @@ function ReturnDecision({
       }}
     >
       <form onSubmit={submit}>
+        {error && <p role="alert">{error}</p>}
         <h3 id="return-decision-title">
           {action === 'receive' ? 'Confirm Received' : returnLabel(action)} ·
           Line #{line.id}

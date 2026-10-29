@@ -181,3 +181,32 @@ it('disables mutations during session expiry and handles empty queues', async ()
   ).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Reject' })).toBeDisabled()
 })
+
+it('shows refused actions inside the active modal so the operator can read the error', async () => {
+  vi.mocked(window.adminReturns.action).mockRejectedValue(
+    new Error('RETURN_TRANSITION_REFUSED'),
+  )
+  render(
+    <Returns
+      navigation={{ orderId: 41, status: 'REQUESTED', page: 1 }}
+      onNavigate={vi.fn()}
+      onViewOriginalOrder={vi.fn()}
+    />,
+  )
+  fireEvent.click(await screen.findByRole('button', { name: 'Authorize' }))
+  const dialog = screen.getByRole('dialog')
+  fireEvent.change(within(dialog).getByLabelText('Postage arrangements'), {
+    target: { value: 'Contact support for prepaid return postage.' },
+  })
+  fireEvent.click(within(dialog).getByRole('checkbox'))
+  fireEvent.submit(
+    within(dialog)
+      .getByRole('button', { name: 'Confirm authorize' })
+      .closest('form')!,
+  )
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+    'RETURN_TRANSITION_REFUSED',
+  )
+  expect(dialog).toHaveAttribute('open')
+  expect(window.adminReturns.action).toHaveBeenCalledOnce()
+})

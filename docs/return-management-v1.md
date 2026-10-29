@@ -43,3 +43,7 @@ Backend return migration/grants and endpoints must release first under separate 
 - [ ] Retry a stale/conflicting action only after reading current server state.
 
 No payment-provider behaviour, production records, infrastructure or live configuration was changed.
+
+## Independent-review correction
+
+Claude Opus's initial read-only review requested that failed return actions announce their error inside the active native modal (outside content is inert while `showModal()` is active). The error is now passed into the decision form, with a regression asserting the alert within the open dialog. Full Admin verification passes with 541 unit/UI tests plus native runtime/security journeys. Final-head independent re-review is required before leaving Draft.
