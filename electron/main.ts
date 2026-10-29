@@ -23,13 +23,18 @@ import { PurchaseError, PurchaseService, validateAmendment, validateReceipt, val
 import type { ManualPurchaseInput } from './purchase-contract.js'
 import { handleEditContextMenu } from './edit-context-menu.js'
 import { guardRendererNavigation, secureIpcHandler, trustedRendererUrl } from './renderer-security.js'
-import { validateBackendUrl } from './backend-url.js'
+import { connectionConfig } from './connection-config.js'
+import { ConnectionManager, connectionFetcher } from './connection-manager.js'
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url))
 const rendererUrl = trustedRendererUrl(join(app.getAppPath(), 'dist', 'index.html'), process.env.ELECTRON_RENDERER_URL, app.isPackaged)
-const backendUrl = validateBackendUrl(process.env.COLORFUL_LIFE_BACKEND_URL ?? 'http://localhost:3000')
+const connectionSettings = connectionConfig(process.env)
+const backendUrl = connectionSettings.backendUrl
+const connection = new ConnectionManager(connectionSettings)
+const ownsInstance = app.requestSingleInstanceLock()
+if (!ownsInstance) app.quit()
 let mainWindow: BrowserWindow | null = null
-const authService = new AuthService(backendUrl, (input, init) => fetch(input, { ...init, redirect: 'error' }), (notice) => {
+const authService = new AuthService(backendUrl, connectionFetcher(connection, (input, init) => fetch(input, { ...init, redirect: 'error' })), (notice) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('admin-auth:session-ended', notice)
 }, (accessTokenExpiresAt) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('admin-auth:session-renewed', accessTokenExpiresAt)
@@ -65,6 +70,9 @@ handleIpc('admin-auth:login', async (_event, credentials: unknown) => {
   }
   return authService.login(credentials)
 })
+
+handleIpc('admin-connection:status', () => connection.status())
+handleIpc('admin-connection:retry', () => connection.retry())
 
 handleIpc('admin-auth:restore', () => authService.restore())
 handleIpc('admin-auth:renew', () => authService.renewSession())
@@ -225,7 +233,9 @@ const createWindow = (): void => {
 }
 
 app.whenReady().then(() => {
+  if (!ownsInstance) return
   createWindow()
+  void connection.start().catch(() => undefined)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -238,4 +248,14 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('second-instance', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus() }
+})
+let quitting = false
+app.on('before-quit', event => {
+  if (!ownsInstance || quitting) return
+  event.preventDefault(); quitting = true
+  void connection.stop().catch(() => undefined).finally(() => app.quit())
 })

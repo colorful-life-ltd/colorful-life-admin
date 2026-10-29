@@ -1,3 +1,4 @@
+import ConnectionPanel from './ConnectionPanel'
 import Returns, {type ReturnsNavigation} from './Returns'
 import Operations from './Operations'
 import Inventory from './Inventory'
@@ -19,6 +20,7 @@ import { useSessionExpiry } from './useSessionExpiry'
 type ViewState = 'restoring' | 'signed-out' | 'signed-in'
 
 function App() {
+  const [connectionReady, setConnectionReady] = useState(() => !window.adminConnection)
   const [viewState, setViewState] = useState<ViewState>(() => window.adminAuth ? 'restoring' : 'signed-out')
   const [user, setUser] = useState<AdminUser | null>(null)
   const [accessTokenExpiresAt, setAccessTokenExpiresAt] = useState<string | null>(null)
@@ -136,6 +138,7 @@ function App() {
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (!connectionReady) return
     setError('')
     setIsSubmitting(true)
     try {
@@ -204,12 +207,12 @@ function App() {
   }
 
   if (viewState === 'restoring') {
-    return <main className="auth-page"><p className="status-message">Restoring session…</p></main>
+    return <main className="auth-page"><ConnectionPanel onReady={setConnectionReady} /><p className="status-message">Restoring session…</p></main>
   }
 
   if (viewState === 'signed-in' && user) {
     return (
-      <main className="shell">
+      <main className="shell"><ConnectionPanel onReady={setConnectionReady} />
         <div inert={warningOpen}>
           <header className="shell-header">
             <div><p className="eyebrow">COLORFUL LIFE</p><div className="workspace-title"><h1>Admin workspace</h1><span className="admin-status" aria-label="Administrator access confirmed">✓</span><span className="admin-email">{user.email}</span></div></div>
@@ -238,7 +241,7 @@ function App() {
   }
 
   return (
-    <main className="auth-page">
+    <main className="auth-page"><ConnectionPanel onReady={setConnectionReady} />
       <div className="auth-layout">
         <section className="identity-panel" aria-label="Colorful Life Admin">
           <div className="brand-mark" aria-hidden="true">CL</div>
@@ -270,7 +273,7 @@ function App() {
               </button>
             </div>
             {error && <p className="error-message" role="alert">{error}</p>}
-            <button className="button button-primary" type="submit" disabled={isSubmitting} aria-busy={isSubmitting}>{isSubmitting ? 'Signing in…' : 'Sign in'}</button>
+            <button className="button button-primary" type="submit" disabled={isSubmitting || !connectionReady} aria-busy={isSubmitting}>{isSubmitting ? 'Signing in…' : 'Sign in'}</button>
           </form>
         </section>
       </div>

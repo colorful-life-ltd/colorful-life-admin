@@ -15,6 +15,7 @@ declare global {
   }
 
   interface Window {
+    adminConnection?: import('../electron/connection-contract').AdminConnectionApi
     adminReturns: import('../electron/return-service').AdminReturnsApi
     adminOperations: import('../electron/operations-contract').AdminOperationsApi
     adminInventory: import('../electron/inventory-contract').AdminInventoryApi

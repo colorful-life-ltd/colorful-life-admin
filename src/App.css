@@ -166,3 +166,6 @@ input:focus { border-color: var(--focus); box-shadow: 0 0 0 3px rgba(211, 139, 6
 .purchase-analytics-state { display: grid; justify-items: start; gap: 12px; }
 .purchase-analytics-state .error-message { margin: 0; }
 @media (max-width: 700px) { .purchase-analytics-totals { grid-template-columns: 1fr; } .supplier-analytics-row, .supplier-monthly-list li, .supplier-undated-total { align-items: flex-start; } }
+
+.connection-panel { position: relative; grid-column: 1 / -1; padding: .75rem 1rem; margin: .75rem; border: 1px solid #b9c8ba; border-radius: .5rem; background: #f6faf6; color: #173c2b; }
+.connection-panel p { margin: .25rem 0; }
