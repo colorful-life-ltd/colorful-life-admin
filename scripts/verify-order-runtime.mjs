@@ -30,6 +30,7 @@ async function run() {
     orderItems: [{ id: 3, quantity: 2, unitPrice: '12.5', lineTotal: '25', productListing: { id: 4, condition: 'NEW', legoProduct: { id: 5, setNumber: '12345', title: 'Runtime LEGO set' } } }],
     fulfilment: { stage: 'CONFIRMED', preparingAt: null, dispatchedAt: null, shipments: [] }, fulfilmentEvents: [],
   }
+  const returnView={orderId:41,reference:'BB-R-41',caseId:'runtime-case',customer:{id:2,email:'buyer@test.invalid',firstName:'Sam',lastName:'Buyer',deleted:false},defaultInstructions:{address:['Colorful Life Ltd','3 Hawthorne Drive','Bolton upon Dearne','S63 8NS','United Kingdom'],instructions:'Pack securely, include your return reference and keep proof of postage.'},items:[{id:3,name:'Runtime LEGO set',quantity:2,remainingQuantity:1,condition:'NEW'}],submissions:[{id:'runtime-submission',requestedAt:timestamp,lines:[{id:10,orderItemId:3,quantity:1,reason:'DEFECTIVE',reasonNote:'Synthetic missing pieces',status:'REQUESTED',requestedAt:timestamp,authorizedAt:null,receivedAt:null,inspectedAt:null,completedAt:null,rejectedAt:null,cancelledAt:null,rejectionNote:null,shippingPayer:null,instructions:null}]}]}
   const server = createServer(async (req, res) => {
     const chunks = []
     for await (const chunk of req) chunks.push(chunk)
@@ -37,7 +38,11 @@ async function run() {
     const body = bodyText ? JSON.parse(bodyText) : undefined
     requests.push({ path: req.url, method: req.method, auth: req.headers.authorization, key: req.headers['idempotency-key'], body })
     let data
-    if (req.url === '/auth/login') data = { token: 'order-runtime-token', accessTokenExpiresAt: new Date(Date.now() + 3600000).toISOString(), refreshToken: 'order-runtime-refresh', refreshExpiresAt: new Date(Date.now() + 86400000).toISOString() }
+    if(req.url.startsWith('/admin/returns?')) data={page:1,pageSize:25,total:1,cases:[{orderId:41,reference:'BB-R-41',createdAt:timestamp,customer:{email:'buyer@test.invalid',firstName:'Sam',lastName:'Buyer',deletedAt:null},statuses:[returnView.submissions[0].lines[0].status]}]}
+    else if(req.url==='/admin/returns/41')data=returnView
+    else if(req.url==='/admin/returns/41/lines/10/authorize') {assert.equal(body.shippingPayer,'SELLER');assert.equal(body.rightsReviewed,true);Object.assign(returnView.submissions[0].lines[0],{status:'AUTHORIZED',authorizedAt:timestamp,shippingPayer:body.shippingPayer,instructions:{reference:'BB-R-41',address:returnView.defaultInstructions.address,instructions:body.instructions,postageInstructions:body.postageInstructions,shippingPayer:body.shippingPayer}});data=returnView}
+    else if(req.url==='/admin/returns/41/lines/10/receive') {assert.equal(typeof body.note,'string');Object.assign(returnView.submissions[0].lines[0],{status:'RECEIVED',receivedAt:body.receivedAt,receiptNote:body.note,receivedByUserId:1});data=returnView}
+    else if (req.url === '/auth/login') data = { token: 'order-runtime-token', accessTokenExpiresAt: new Date(Date.now() + 3600000).toISOString(), refreshToken: 'order-runtime-refresh', refreshExpiresAt: new Date(Date.now() + 86400000).toISOString() }
     else if (req.url === '/orders/41/payments') data = [{ id: 7, orderId: 41, amount: '25', currency: 'GBP', provider: 'STRIPE', status: 'SUCCEEDED', paidAt: timestamp, refundedAmount: financialMode === 'full' ? '25' : '0', reservedRefundAmount: '0', providerReference: 'DO_NOT_EXPOSE', idempotencyKey: 'DO_NOT_EXPOSE' }]
     else if (req.url === '/orders/41/refunds') {
       if (financialMode === 'failure') { res.statusCode = 503; data = { error: 'Unavailable' } }
@@ -170,6 +175,37 @@ async function run() {
     assert.equal(requests.filter(r => r.path.endsWith('/fulfilment/dispatch')).length, 2)
     assert(requests.filter(r => r.path.startsWith('/admin/orders')).every(r => r.auth === 'Bearer order-runtime-token'))
     writeFileSync(join(folder, 'order-detail.png'), (await window.webContents.capturePage()).toPNG())
+    const beforeReturns=requests.length
+    await click('Returns')
+    await until("!!document.querySelector('.return-queue-card')")
+    await js("document.querySelector('.return-queue-card').click()")
+    await until("document.body.textContent.includes('Returns · BB-R-41')")
+    await click('View Original Order')
+    await until("document.body.textContent.includes('Track shipment 1')")
+    writeFileSync(join(folder,'return-original-order.png'),(await window.webContents.capturePage()).toPNG())
+    await click('View Returns')
+    await until("document.body.textContent.includes('Returns · BB-R-41')")
+    await click('Back to Returns')
+    await until("!!document.querySelector('[aria-label=\"Return status filter\"]')")
+    assert.equal(await js("document.querySelector('[aria-label=\"Return status filter\"]').value"),'REQUESTED')
+    await until("!!document.querySelector('.return-queue-card')")
+    await js("document.querySelector('.return-queue-card').click()")
+    await click('Authorize')
+    await until("document.querySelector('dialog')?.matches(':modal')")
+    assert.equal(await js("document.querySelector('dialog').textContent.includes('3 Hawthorne Drive')"),true)
+    await js("(()=>{const input=document.querySelector('dialog textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'Contact support to arrange a prepaid return label.');input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('dialog input[type=checkbox]').click()})()")
+    writeFileSync(join(folder,'returns-authorisation-preview.png'),(await window.webContents.capturePage()).toPNG())
+    await click('Confirm authorize')
+    await click('Confirm Received')
+    await js("(()=>{const input=document.querySelector('dialog textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'Synthetic parcel received in stock room');input.dispatchEvent(new Event('input',{bubbles:true}))})()")
+    await click('Confirm receipt')
+    await until("document.body.textContent.includes('Receipt operator #1')")
+    writeFileSync(join(folder,'returns-received.png'),(await window.webContents.capturePage()).toPNG())
+    const returnRequests=requests.slice(beforeReturns)
+    assert(returnRequests.filter(r=>r.path.startsWith('/admin/returns')).every(r=>r.auth==='Bearer order-runtime-token'))
+    assert.equal(returnRequests.filter(r=>r.method==='POST').length,2)
+    assert(returnRequests.filter(r=>r.method==='POST').every(r=>r.path.startsWith('/admin/returns/')))
+    console.log('Verified compiled Returns queue/detail, permanent reference, original-order navigation both ways with filter context, instruction preview/authorisation, and receipt without refund calls.')
     console.log('Verified exact-generation cancellation/withdrawal and durable identical-key lost-response replay, whitelisted read-only financial IPC, exact major-unit amounts, fully-refunded dispatch blocking, failed history recovery, authenticated order IPC, native confirmation dialogs, security-review rejection without retry, Preparing and trusted-carrier Dispatch in compiled Electron.')
     console.log('Runtime screenshot: ' + join(folder, 'order-detail.png'))
     clearTimeout(timeout); server.close(); app.exit(0)

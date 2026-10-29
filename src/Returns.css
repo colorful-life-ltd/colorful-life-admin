@@ -1,0 +1,126 @@
+.returns-workspace {
+  max-width: 1150px;
+  margin: 0 auto;
+  padding: 24px;
+}
+.returns-workspace > header,
+.return-line > header,
+.return-navigation,
+.return-actions,
+.returns-workspace nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+.returns-eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.75rem;
+  color: #526253;
+}
+.returns-queue {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 310px), 1fr));
+  gap: 16px;
+  margin: 20px 0;
+}
+.return-queue-card {
+  display: grid;
+  gap: 10px;
+  background: #fffdf7;
+  border: 1px solid #d1d8cb;
+  border-radius: 12px;
+  padding: 20px;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.return-queue-card:hover {
+  border-color: #3b634a;
+  box-shadow: 0 3px 12px #23372a14;
+}
+.return-status {
+  display: inline-block;
+  border-radius: 20px;
+  background: #edf0ea;
+  padding: 4px 10px;
+  margin: 2px;
+  font-size: 0.8rem;
+}
+.return-status--requested {
+  background: #fff0c2;
+}
+.return-status--authorized {
+  background: #dcebf7;
+}
+.return-status--received,
+.return-status--inspected {
+  background: #e7dff5;
+}
+.return-status--completed {
+  background: #d6eadb;
+}
+.return-status--rejected {
+  background: #f6dfdc;
+}
+.return-submission {
+  margin: 28px 0;
+}
+.return-line {
+  border: 1px solid #d1d8cb;
+  border-radius: 12px;
+  background: #fff;
+  padding: 20px;
+  margin: 14px 0;
+}
+.return-line h4 {
+  margin: 0;
+}
+.return-instructions {
+  background: #f1f5ed;
+  border-left: 4px solid #527052;
+  padding: 18px;
+  margin: 18px 0;
+  white-space: pre-wrap;
+}
+.return-timeline {
+  font-size: 0.9rem;
+  color: #455548;
+}
+.return-decision {
+  width: min(640px, 90vw);
+  max-height: 85vh;
+  border: 1px solid #afbdac;
+  border-radius: 14px;
+  padding: 24px;
+  color: #243c2c;
+}
+.return-decision::backdrop {
+  background: #16271c88;
+}
+.return-decision label {
+  display: block;
+  margin: 16px 0;
+}
+.return-decision textarea,
+.return-decision select,
+.return-decision input:not([type='checkbox']) {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 7px;
+  padding: 9px;
+  border: 1px solid #a7b4a3;
+  border-radius: 5px;
+  font: inherit;
+}
+.return-decision textarea {
+  min-height: 85px;
+}
+.return-actions {
+  justify-content: flex-start;
+  margin-top: 18px;
+}

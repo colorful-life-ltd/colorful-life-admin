@@ -21,10 +21,10 @@ const readFinancials = async (id: number): Promise<OrderFinancials> => {
   catch { return { payment: { state: 'error', message: 'Payment information could not be read. Refresh to retry.' }, refunds: { state: 'error', message: 'Refund history could not be read. Refresh to retry.' }, consistent: false } }
 }
 type Action = 'preparing' | 'dispatch' | 'cancel'
-export default function Orders({ sessionBlocked = false }: { sessionBlocked?: boolean }) {
+export default function Orders({ sessionBlocked = false, initialOrderId = null, onViewReturns }: { sessionBlocked?: boolean; initialOrderId?:number|null;onViewReturns?:(id:number)=>void }) {
   const [page, setPage] = useState(1)
   const [result, setResult] = useState<OrderPage | null>(null)
-  const [id, setId] = useState<number | null>(null)
+  const [id, setId] = useState<number | null>(initialOrderId)
   const [order, setOrder] = useState<OrderDetail | null>(null)
   const [financials, setFinancials] = useState<OrderFinancials | null>(null)
   const [loading, setLoading] = useState(true)
@@ -122,6 +122,7 @@ export default function Orders({ sessionBlocked = false }: { sessionBlocked?: bo
       <nav className="order-actions" aria-label="Order pages"><button className="button button-secondary" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Previous</button><span>Page {result.pagination.page} of {Math.max(1, result.pagination.totalPages)} · {result.pagination.totalItems} orders</span><button className="button button-secondary" disabled={page >= result.pagination.totalPages || page >= 10000} onClick={() => setPage(p => p + 1)}>Next</button></nav>
     </>}
     {!loading && order && <>
+      <button className="button button-primary" disabled={pending} onClick={()=>onViewReturns?.(order.id)}>View Returns</button>
       <p>{order.user.email} · Placed {date(order.createdAt)}</p>
       <dl><dt>Order status</dt><dd>{label(order.status)}</dd><dt>Payment</dt><dd>{label(order.paymentStatus)}{order.payment?.paidAt && ` · ${date(order.payment.paidAt)}`}</dd><dt>Fulfilment</dt><dd>{label(order.fulfilmentStage)}</dd><dt>Total</dt><dd>{money(order.totalAmount, order.currency)} {order.currency}</dd></dl>
       <OrderFinancialDetails data={financials} warning={financialWarning} />
