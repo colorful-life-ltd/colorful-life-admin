@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "concurrently --kill-others --names renderer,electron-build,electron \"npm:dev:renderer\" \"npm:dev:electron:compile\" \"npm:dev:electron:launch\"",
     "dev:renderer": "vite --host 127.0.0.1",
-    "dev:electron:compile": "node scripts/copy-electron-assets.mjs && tsc -p tsconfig.electron.json --watch",
+    "dev:electron:compile": "run-s build:electron:assets dev:electron:watch",
+    "dev:electron:watch": "tsc -p tsconfig.electron.json --watch",
     "dev:electron:launch": "run-s dev:electron:wait dev:electron:run",
     "dev:electron:wait": "wait-on http://127.0.0.1:5173 dist-electron/main.js",
     "dev:electron:run": "cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron .",
@@ -16,7 +17,9 @@
     "build:renderer": "run-s build:renderer:vite verify:renderer-build",
     "build:renderer:vite": "vite build",
     "verify:renderer-build": "node scripts/verify-renderer-build.mjs",
-    "build:electron": "tsc -p tsconfig.electron.json && node scripts/copy-electron-assets.mjs",
+    "build:electron": "run-s build:electron:tsc build:electron:assets",
+    "build:electron:tsc": "tsc -p tsconfig.electron.json",
+    "build:electron:assets": "node scripts/copy-electron-assets.mjs",
     "electron": "electron .",
     "test": "run-s test:unit build test:electron-boundary test:electron-runtime test:orders-runtime test:inventory-runtime test:security-runtime test:development-runtime",
     "test:unit": "vitest run",
@@ -28,11 +31,13 @@
     "test:security-runtime": "electron scripts/verify-security-runtime.mjs",
     "test:development-runtime": "node scripts/verify-development-runtime.mjs",
     "test:inventory-runtime": "electron scripts/verify-inventory-runtime.mjs",
-    "package": "npm run build && node scripts/package.mjs",
+    "package": "run-s build package:create",
+    "package:create": "node scripts/package.mjs",
     "verify:package": "node scripts/verify-package.mjs",
     "test:contracts": "node scripts/verify-shared-contract.mjs",
     "dev:sandbox": "cross-env COLORFUL_LIFE_CONNECTION_MODE=remote-sandbox npm run dev",
-    "electron:sandbox": "cross-env COLORFUL_LIFE_CONNECTION_MODE=remote-sandbox electron ."
+    "electron:sandbox": "run-s build electron:sandbox:launch",
+    "electron:sandbox:launch": "cross-env COLORFUL_LIFE_CONNECTION_MODE=remote-sandbox electron ."
   },
   "dependencies": {
     "react": "^19.2.8",
