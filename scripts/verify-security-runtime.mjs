@@ -19,9 +19,11 @@ async function run() {
   const external = []
   shell.openExternal = async url => { external.push(url) }
   let requests = 0
+  const requestPaths = []
   let redirected = 0
   const server = createServer((req, res) => {
     requests++
+    requestPaths.push(req.url)
     if (req.url === '/auth/login') { res.writeHead(307, { Location: '/redirected' }); res.end(); return }
     if (req.url === '/redirected') redirected++
     res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ error: 'Fixture only' }))
@@ -68,7 +70,9 @@ async function run() {
         assert.equal(result.__colorfulLifeAdminIpcError.status, 403, channel)
       }
     }
-    assert.equal(requests, 0)
+    assert.ok(requests <= 1)
+    assert.ok(requestPaths.every(path => path === '/admin/bootstrap/status'), 'startup may only query the no-store bootstrap status endpoint')
+    const requestsBeforeCsp = requests
     // A real second BrowserWindow with the same preload and entry document still has no authority.
     const impostor = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: join(root, 'dist-electron/preload.cjs') } })
     await impostor.loadURL(trusted)
@@ -88,7 +92,7 @@ async function run() {
     })()`)
     await until("window.securityViolations.includes('script-src-elem') && window.securityViolations.includes('frame-src') && window.securityViolations.includes('connect-src')")
     assert.equal(await js('window.inlineAttack'), undefined)
-    assert.equal(requests, 0)
+    assert.equal(requests, requestsBeforeCsp, 'renderer network attempts must remain blocked')
     // Product previews must remain usable under the policy; no remote service required.
     assert.equal(await js(`new Promise(resolve => { const img = new Image(); img.onload = () => resolve(true); img.onerror = () => resolve(false); img.src = URL.createObjectURL(new Blob(['<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'], {type:'image/svg+xml'})); })`), true)
     assert((await js("document.querySelector('meta[http-equiv=\"Content-Security-Policy\"]').content")).includes('https://res.cloudinary.com'))
@@ -112,7 +116,7 @@ async function run() {
     for (const type of ['dragEnter', 'dragOver', 'drop']) await window.webContents.debugger.sendCommand('Input.dispatchDragEvent', { type, x: 100, y: 100, data })
     window.webContents.debugger.detach()
     assert.equal(window.webContents.getURL(), trusted)
-    assert.equal(requests, 0)
+    assert.equal(requests, requestsBeforeCsp, 'blocked navigation and drag/drop must not cause Backend requests')
     await js("location.hash = 'orders'")
     assert.equal(await js('window.adminAuth.restore()'), null)
     const tracking = 'https://www.royalmail.com/track-your-item#/tracking-results/AB123456789GB'
@@ -126,7 +130,7 @@ async function run() {
     // Main fetch must reject a Backend redirect instead of forwarding login credentials.
     const login = await js("window.adminAuth.login({email:'admin@test.invalid', password:'synthetic'})")
     assert.equal(login.__colorfulLifeAdminIpcError.code, 'network')
-    assert.equal(requests, 1); assert.equal(redirected, 0)
+    assert.equal(requests, requestsBeforeCsp + 1); assert.deepEqual(requestPaths.slice(requestsBeforeCsp), ['/auth/login']); assert.equal(redirected, 0)
     if (development) {
       const session = window.webContents.session
       session.webRequest.onBeforeSendHeaders({ urls: ['http://127.0.0.1:5173/'] }, (details, done) => done({ requestHeaders: { ...details.requestHeaders, 'X-Runtime-Redirect': '1' } }))

@@ -1,4 +1,4 @@
-import type { AdminSessionEndedNotice, AdminSessionView, AdminUser, LoginCredentials } from './auth-contract.js'
+import type { AdminSessionEndedNotice, AdminSessionView, AdminUser, BootstrapStatus, LoginCredentials } from './auth-contract.js'
 import { readBackendError } from './backend-error.js'
 
 export type Fetcher = (input: string, init?: RequestInit) => Promise<Response>
@@ -175,6 +175,47 @@ export class AuthService {
 
     this.session = { ...payload, user }
     return sessionView(this.session)
+  }
+
+  async bootstrapStatus(): Promise<BootstrapStatus> {
+    let response: Response
+    try { response = await this.fetcher(`${this.backendUrl}/admin/bootstrap/status`, { headers: { Accept: 'application/json' } }) }
+    catch { throw new AuthError('network', 'Unable to reach the Colorful Life service.') }
+    const body = await parseJson(response)
+    if (!response.ok || !isRecord(body) || typeof body.registrationAvailable !== 'boolean') {
+      throw new AuthError('server', 'Administrator setup status is unavailable.', null, response.status)
+    }
+    return { registrationAvailable: body.registrationAvailable }
+  }
+
+  async registerFirstAdmin(credentials: LoginCredentials): Promise<void> {
+    let authorizationResponse: Response
+    try { authorizationResponse = await this.fetcher(`${this.backendUrl}/admin/bootstrap/authorization`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }) }
+    catch { throw new AuthError('network', 'Unable to reach the Colorful Life service.') }
+    if (!authorizationResponse.ok) throw new AuthError('server', 'First-time registration is unavailable. Confirm owner access and try again.', null, authorizationResponse.status)
+    const authorizationBody = await parseJson(authorizationResponse)
+    if (!isRecord(authorizationBody) || typeof authorizationBody.authorization !== 'string') throw new AuthError('malformed-response', 'The server returned an invalid setup authorization.')
+    let response: Response
+    try {
+      response = await this.fetcher(`${this.backendUrl}/admin/bootstrap/register`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin-Bootstrap-Authorization': authorizationBody.authorization },
+        body: JSON.stringify(credentials),
+      })
+    } catch { throw new AuthError('network', 'Unable to reach the Colorful Life service.') }
+    if (!response.ok) {
+      const details = await readBackendError(response, 'Administrator registration failed.')
+      if (details.code === 'BOOTSTRAP_CLOSED') throw new AuthError('forbidden', 'Administrator setup is already complete. Sign in or use password recovery.', details.code, response.status)
+      if (details.code === 'BOOTSTRAP_AUTHORIZATION_INVALID') throw new AuthError('forbidden', 'Setup authorization expired. Start registration again.', details.code, response.status)
+      if (response.status === 400) throw new AuthError('validation', 'Enter a valid email and a strong password.', details.code, response.status)
+      throw new AuthError('server', details.message, details.code, response.status)
+    }
+  }
+
+  async requestPasswordReset(email: string): Promise<void> {
+    let response: Response
+    try { response = await this.fetcher(`${this.backendUrl}/auth/forgot-password`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) }) }
+    catch { throw new AuthError('network', 'Unable to reach the Colorful Life service.') }
+    if (!response.ok) throw new AuthError('server', 'Password recovery is temporarily unavailable.')
   }
 
   async restore(): Promise<AdminSessionView | null> {

@@ -27,6 +27,11 @@ function App() {
   const [expiryScheduleRevision, setExpiryScheduleRevision] = useState(0)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [bootstrapAvailable, setBootstrapAvailable] = useState(false)
+  const [bootstrapError, setBootstrapError] = useState('')
+  const [registrationOpen, setRegistrationOpen] = useState(false)
+  const [recoveryMessage, setRecoveryMessage] = useState('')
   const [isPasswordVisible, setIsPasswordVisible] = useState(false)
   const [error, setError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -131,6 +136,21 @@ function App() {
   }, [applySession])
 
   useEffect(() => {
+    if (!connectionReady || !window.adminAuth) return
+    let active = true
+    void adminAuth.bootstrapStatus().then((status) => {
+      if (!active) return
+      setBootstrapAvailable(status.registrationAvailable)
+      setBootstrapError('')
+    }).catch(() => {
+      if (!active) return
+      setBootstrapAvailable(false)
+      setBootstrapError('Administrator setup status is unavailable. Check the Sandbox connection and owner access.')
+    })
+    return () => { active = false }
+  }, [connectionReady])
+
+  useEffect(() => {
     if (viewState === 'signed-in' && user) {
       void window.adminWindow?.maximize().catch(() => undefined)
     }
@@ -152,6 +172,31 @@ function App() {
     } finally {
       setIsSubmitting(false)
     }
+  }
+
+  const handleBootstrapSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!connectionReady || isSubmitting) return
+    if (password !== confirmPassword) { setError('Passwords do not match.'); return }
+    setError(''); setIsSubmitting(true)
+    try {
+      await adminAuth.registerFirstAdmin({ email, password })
+      setBootstrapAvailable(false); setRegistrationOpen(false); setConfirmPassword('')
+      setPassword('')
+      setRecoveryMessage('Administrator registered. Check your email and verify the account before signing in.')
+    } catch (submissionError) {
+      setError(submissionError instanceof Error ? submissionError.message : 'Administrator registration failed.')
+      if (isAdminIpcError(submissionError) && submissionError.code === 'forbidden') setBootstrapAvailable(false)
+    } finally { setIsSubmitting(false) }
+  }
+
+  const handlePasswordRecovery = async () => {
+    if (!connectionReady || !email.trim()) { setError('Enter your account email first.'); return }
+    setError(''); setRecoveryMessage('')
+    try {
+      await adminAuth.requestPasswordReset(email)
+      setRecoveryMessage('If that account exists, password recovery instructions have been sent to its verified email address.')
+    } catch (recoveryError) { setError(recoveryError instanceof Error ? recoveryError.message : 'Password recovery is unavailable.') }
   }
 
   const handleRenewSession = async () => {
@@ -253,14 +298,14 @@ function App() {
         </section>
         <section className="login-card" aria-labelledby="login-title">
           <p className="eyebrow">ADMIN ACCESS</p>
-          <h2 id="login-title">Sign in to continue</h2>
-          <p className="intro">Use an administrator account to continue.</p>
-          <form onSubmit={(event) => void handleSubmit(event)}>
+          <h2 id="login-title">{registrationOpen ? 'Register Administrator' : 'Sign in to continue'}</h2>
+          <p className="intro">{registrationOpen ? 'Use an email address you control. We will send a verification link so password recovery remains available.' : 'Use an administrator account to continue.'}</p>
+          <form onSubmit={(event) => void (registrationOpen ? handleBootstrapSubmit(event) : handleSubmit(event))}>
             <label htmlFor="email">Email</label>
             <input id="email" type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required />
             <label htmlFor="password">Password</label>
             <div className="password-field">
-              <input id="password" type={isPasswordVisible ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+            <input id="password" type={isPasswordVisible ? 'text' : 'password'} autoComplete={registrationOpen ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} required />
               <button
                 className="password-toggle"
                 type="button"
@@ -272,9 +317,15 @@ function App() {
                 </svg>
               </button>
             </div>
+            {registrationOpen && <><label htmlFor="confirm-password">Confirm password</label><input id="confirm-password" type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required /></>}
             {error && <p className="error-message" role="alert">{error}</p>}
-            <button className="button button-primary" type="submit" disabled={isSubmitting || !connectionReady} aria-busy={isSubmitting}>{isSubmitting ? 'Signing in…' : 'Sign in'}</button>
+            {recoveryMessage && <p className="status-message" role="status">{recoveryMessage}</p>}
+            <button className="button button-primary" type="submit" disabled={isSubmitting || !connectionReady} aria-busy={isSubmitting}>{isSubmitting ? (registrationOpen ? 'Registering…' : 'Signing in…') : (registrationOpen ? 'Register Administrator' : 'Sign in')}</button>
           </form>
+          {!registrationOpen && <button className="button button-secondary" type="button" onClick={() => void handlePasswordRecovery()} disabled={!connectionReady}>Forgot password?</button>}
+          {!registrationOpen && bootstrapAvailable && <button className="button button-secondary" type="button" onClick={() => { setError(''); setRegistrationOpen(true) }}>Register Administrator</button>}
+          {bootstrapError && <p className="status-message" role="status">{bootstrapError}</p>}
+          {registrationOpen && <button className="button button-secondary" type="button" onClick={() => { setRegistrationOpen(false); setPassword(''); setConfirmPassword(''); setError('') }}>Back to sign in</button>}
         </section>
       </div>
     </main>

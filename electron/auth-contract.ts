@@ -11,6 +11,8 @@ export interface LoginCredentials {
   password: string
 }
 
+export interface BootstrapStatus { registrationAvailable: boolean }
+
 export interface AdminSessionView {
   user: AdminUser
   accessTokenExpiresAt: string
@@ -22,6 +24,9 @@ export interface AdminSessionEndedNotice {
 }
 
 export interface AdminAuthApi {
+  bootstrapStatus(): Promise<BootstrapStatus>
+  registerFirstAdmin(credentials: LoginCredentials): Promise<void>
+  requestPasswordReset(email: string): Promise<void>
   login(credentials: LoginCredentials): Promise<AdminSessionView>
   restore(): Promise<AdminSessionView | null>
   renewSession(): Promise<{ accessTokenExpiresAt: string }>

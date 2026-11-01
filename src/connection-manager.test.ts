@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ConnectionManager, connectionFetcher, tunnelFailure, type ConnectionDependencies } from '../electron/connection-manager'
-import { connectionConfig } from '../electron/connection-config'
+import { connectionConfig, SANDBOX_BACKEND_URL } from '../electron/connection-config'
 import { AuthService } from '../electron/auth-service'
 import type { OwnedTunnel } from '../electron/ssm-process'
 const config = connectionConfig({ COLORFUL_LIFE_CONNECTION_MODE: 'remote-sandbox' })
@@ -14,6 +14,11 @@ function fixture(overrides: Partial<ConnectionDependencies> = {}) {
   return { manager, deps, transport, emit: (s: string) => output(s), exit: () => exit() }
 }
 describe('owned SSM connection', () => {
+  it('defaults direct Admin development to the cloud Sandbox API and permits local-only overrides', () => {
+    expect(connectionConfig({}).backendUrl).toBe(SANDBOX_BACKEND_URL)
+    expect(connectionConfig({ COLORFUL_LIFE_BACKEND_URL: 'http://localhost:3000/api' }).backendUrl).toBe('http://localhost:3000/api')
+    expect(() => connectionConfig({ COLORFUL_LIFE_BACKEND_URL: 'https://production.example.com/api' })).toThrow(/configuration/)
+  })
   it('starts once with explicit profile and safe argument array, and only connects after readiness', async () => {
     const f = fixture(); await Promise.all([f.manager.start(), f.manager.start(), f.manager.ensureReady()])
     expect(f.deps.spawn).toHaveBeenCalledTimes(1)

@@ -13,6 +13,9 @@ describe('App authentication flow', () => {
   beforeEach(() => {
     window.adminWindow = { maximize: vi.fn().mockResolvedValue(undefined) }
     window.adminAuth = {
+      bootstrapStatus: vi.fn().mockResolvedValue({ registrationAvailable: false }),
+      registerFirstAdmin: vi.fn().mockResolvedValue(undefined),
+      requestPasswordReset: vi.fn().mockResolvedValue(undefined),
       restore: vi.fn().mockResolvedValue(null),
       login: vi.fn().mockResolvedValue(adminSession),
       renewSession: vi.fn().mockResolvedValue({ accessTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() }),
@@ -68,6 +71,33 @@ describe('App authentication flow', () => {
     await waitFor(() => expect(window.adminWindow.maximize).toHaveBeenCalledOnce())
     expect(screen.getByText(admin.email)).toBeInTheDocument()
     expect(window.adminAuth.login).toHaveBeenCalledWith({ email: admin.email, password: 'secret' })
+  })
+
+  it('offers first Admin registration only when Backend reports setup available and requires email verification before login', async () => {
+    window.adminAuth.bootstrapStatus = vi.fn().mockResolvedValue({ registrationAvailable: true })
+    window.adminAuth.registerFirstAdmin = vi.fn().mockResolvedValue(undefined)
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Register Administrator' }))
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.test' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'StrongPass1!' } })
+    fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'StrongPass1!' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Register Administrator' }))
+    await waitFor(() => expect(window.adminAuth.registerFirstAdmin).toHaveBeenCalledWith({ email: 'owner@example.test', password: 'StrongPass1!' }))
+    expect(await screen.findByText(/Administrator registered\. Check your email and verify/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Register Administrator' })).not.toBeInTheDocument()
+    expect(window.adminAuth.login).not.toHaveBeenCalled()
+  })
+
+  it('does not offer registration when setup is closed or the Backend cannot report its state', async () => {
+    window.adminAuth.bootstrapStatus = vi.fn().mockResolvedValue({ registrationAvailable: false })
+    const { unmount } = render(<App />)
+    await waitFor(() => expect(window.adminAuth.bootstrapStatus).toHaveBeenCalled())
+    expect(screen.queryByRole('button', { name: 'Register Administrator' })).not.toBeInTheDocument()
+    unmount()
+    window.adminAuth.bootstrapStatus = vi.fn().mockRejectedValue(new Error('offline'))
+    render(<App />)
+    expect(await screen.findByText(/Administrator setup status is unavailable/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Register Administrator' })).not.toBeInTheDocument()
   })
 
   it('opens Inventory through the authenticated navigation and returns to Products', async () => {
