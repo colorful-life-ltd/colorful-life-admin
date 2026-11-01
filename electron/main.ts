@@ -71,6 +71,16 @@ handleIpc('admin-auth:login', async (_event, credentials: unknown) => {
   return authService.login(credentials)
 })
 
+handleIpc('admin-auth:bootstrap-status', () => authService.bootstrapStatus())
+handleIpc('admin-auth:register-first-admin', async (_event, credentials: unknown) => {
+  if (!isLoginCredentials(credentials)) throw new AuthError('validation', 'Enter a valid email and password.')
+  await authService.registerFirstAdmin(credentials)
+})
+handleIpc('admin-auth:request-password-reset', async (_event, email: unknown) => {
+  if (typeof email !== 'string' || email.trim().length > 254) throw new AuthError('validation', 'Enter a valid email address.')
+  await authService.requestPasswordReset(email)
+})
+
 handleIpc('admin-connection:status', () => connection.status())
 handleIpc('admin-connection:retry', () => connection.retry())
 

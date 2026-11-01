@@ -18,6 +18,22 @@ const loginCalls = (fetcher: ReturnType<typeof vi.fn>) => {
 describe('AuthService renewable session lifecycle', () => {
   beforeEach(() => vi.restoreAllMocks())
 
+  it('fetches bootstrap availability and treats a network failure as unavailable, not empty', async () => {
+    const fetcher = vi.fn().mockResolvedValue(response({ registrationAvailable: true }))
+    const service = new AuthService('https://sandbox.test/api', fetcher)
+    await expect(service.bootstrapStatus()).resolves.toEqual({ registrationAvailable: true })
+    expect(fetcher).toHaveBeenCalledWith('https://sandbox.test/api/admin/bootstrap/status', expect.any(Object))
+    await expect(new AuthService('https://sandbox.test/api', vi.fn().mockRejectedValue(new Error('offline'))).bootstrapStatus()).rejects.toMatchObject({ code: 'network' })
+  })
+
+  it('uses a short-lived owner authorization before first Admin registration', async () => {
+    const authorization = 'x'.repeat(43)
+    const fetcher = vi.fn().mockResolvedValueOnce(response({ authorization, expiresInSeconds: 300 })).mockResolvedValueOnce(response({ registered: true }, 201))
+    await new AuthService('https://sandbox.test/api', fetcher).registerFirstAdmin({ email: 'owner@example.test', password: 'StrongPass1!' })
+    expect(fetcher).toHaveBeenNthCalledWith(1, 'https://sandbox.test/api/admin/bootstrap/authorization', expect.objectContaining({ method: 'POST' }))
+    expect(fetcher).toHaveBeenNthCalledWith(2, 'https://sandbox.test/api/admin/bootstrap/register', expect.objectContaining({ headers: expect.objectContaining({ 'X-Admin-Bootstrap-Authorization': authorization }) }))
+  })
+
   it('stores the complete login contract in main and exposes only user plus access expiry', async () => {
     const fetcher = vi.fn()
     loginCalls(fetcher)

@@ -15,6 +15,9 @@ const forwardIpcResult = <Result,>(request: Promise<Result>): Promise<Result> =>
 
 // Keep the preload as the only future boundary for renderer-to-main IPC.
 const adminAuth: AdminAuthApi = {
+  bootstrapStatus: () => forwardIpcResult(ipcRenderer.invoke('admin-auth:bootstrap-status')),
+  registerFirstAdmin: (credentials) => forwardIpcResult(ipcRenderer.invoke('admin-auth:register-first-admin', credentials)),
+  requestPasswordReset: (email) => forwardIpcResult(ipcRenderer.invoke('admin-auth:request-password-reset', email)),
   login: (credentials) => forwardIpcResult(ipcRenderer.invoke('admin-auth:login', credentials)),
   restore: () => forwardIpcResult(ipcRenderer.invoke('admin-auth:restore')),
   renewSession: () => forwardIpcResult(ipcRenderer.invoke('admin-auth:renew')),
