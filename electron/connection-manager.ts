@@ -175,8 +175,7 @@ export class ConnectionManager {
 /** One credential-free line per Backend response: method, path without query, status and content type.
  *  An HTML 404 means the request never reached the Backend (for example the public Nginx catch-all). */
 export function apiResponseLine(method: string | undefined, url: string, status: number, contentType: string | null): string {
-  let path = url
-  try { const parsed = new URL(url); path = `${parsed.origin}${parsed.pathname}` } catch { path = url.split('?')[0] }
+  const path = URL.canParse(url) ? `${new URL(url).origin}${new URL(url).pathname}` : url.split('?')[0]
   return `[Admin API] ${(method ?? 'GET').toUpperCase()} ${path} -> ${status} ${(contentType ?? 'no content-type').split(';')[0]}`
 }
 
