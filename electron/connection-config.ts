@@ -5,7 +5,9 @@ export type ConnectionConfig = {
   instance: string; localPort: number; remotePort: number; awsPath?: string; pluginPath?: string;
 }
 export function connectionConfig(env: NodeJS.ProcessEnv): ConnectionConfig {
-  const mode = env.COLORFUL_LIFE_CONNECTION_MODE ?? 'direct'
+  // The Admin API is reachable only through the owner's SSM tunnel; the public Sandbox Nginx
+  // allow-lists just storefront, login, returns and bootstrap routes. A local Backend URL keeps direct mode.
+  const mode = env.COLORFUL_LIFE_CONNECTION_MODE ?? (env.COLORFUL_LIFE_BACKEND_URL ? 'direct' : 'remote-sandbox')
   const invalid = () => new Error('Invalid Admin connection configuration. Use direct or remote-sandbox mode and a matching loopback Backend URL.')
   if (mode !== 'direct' && mode !== 'remote-sandbox') throw invalid()
   const port = (value: string | undefined, fallback: number) => {

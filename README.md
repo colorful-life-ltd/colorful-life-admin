@@ -187,13 +187,18 @@ For development with hot reload, use `npm run dev:sandbox`. Both commands select
 `remote-sandbox` mode and automatically establish the tunnel, without a separate
 PowerShell window or manual SSM command. For a packaged executable, set the user
 environment variable `COLORFUL_LIFE_CONNECTION_MODE=remote-sandbox` once before
-launching it. Ordinary `npm run dev` / `npm run electron` retain direct/local mode.
+launching it. Ordinary `npm run dev` / `npm run electron` also default to
+`remote-sandbox`: the public Sandbox Nginx (`https://build-and-bloom.co.uk/api`)
+exposes only storefront, login, returns and first-Admin bootstrap routes, so the
+full Admin API is reached through the tunnel. Set `COLORFUL_LIFE_CONNECTION_MODE=direct`
+to use that public URL (for example, first-Admin registration from a machine
+without the AWS tools), or `COLORFUL_LIFE_BACKEND_URL` for a local Backend.
 
 Configuration uses the existing process environment convention:
 
 | Variable | Remote Sandbox default |
 | --- | --- |
-| `COLORFUL_LIFE_CONNECTION_MODE` | `direct`; explicitly select `remote-sandbox` |
+| `COLORFUL_LIFE_CONNECTION_MODE` | `remote-sandbox` (or `direct` when `COLORFUL_LIFE_BACKEND_URL` is set); `direct` uses the public Sandbox URL |
 | `COLORFUL_LIFE_BACKEND_URL` | `http://localhost:3000` (derived from local port if unset) |
 | `COLORFUL_LIFE_AWS_PROFILE` | `colorful-life-admin` |
 | `COLORFUL_LIFE_AWS_REGION` | `eu-west-2` |
