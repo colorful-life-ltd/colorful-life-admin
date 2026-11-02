@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 import Returns, { type ReturnsNavigation } from './Returns'
+import { RETURN_POSTAGE_INSTRUCTIONS } from './returnPostage'
 import Orders from './Orders'
 import { returnCase, returnQueue } from './test-fixtures/returns'
 import { order, orderPage, financials } from './test-fixtures/order'
@@ -88,7 +89,8 @@ it('groups requests and navigates directly to original order and back, preservin
   )
   expect(window.adminReturns.list).toHaveBeenLastCalledWith('AUTHORIZED', 1)
 })
-it('previews the approved address and requires postage instructions and confirmation before authorising', async () => {
+const openAuthorize = async (detail = returnCase) => {
+  setup(detail)
   render(
     <Returns
       navigation={{ orderId: 41, status: 'REQUESTED', page: 1 }}
@@ -97,30 +99,75 @@ it('previews the approved address and requires postage instructions and confirma
     />,
   )
   fireEvent.click(await screen.findByRole('button', { name: 'Authorize' }))
-  const dialog = screen.getByRole('dialog')
-  expect(within(dialog).getByText('3 Hawthorne Drive')).toBeInTheDocument()
-  expect(window.adminReturns.action).not.toHaveBeenCalled()
-  fireEvent.change(within(dialog).getByLabelText('Postage arrangements'), {
-    target: { value: 'Contact support for prepaid return postage.' },
-  })
-  fireEvent.click(within(dialog).getByRole('checkbox'))
+  return screen.getByRole('dialog')
+}
+const confirmAuthorize = async (dialog: HTMLElement) => {
   fireEvent.submit(
     within(dialog)
       .getByRole('button', { name: 'Confirm authorize' })
       .closest('form')!,
   )
   await act(async () => {})
+}
+it('requires an explicit postage choice and sends fixed seller-reimbursement text', async () => {
+  const dialog = await openAuthorize()
+  expect(within(dialog).getByText('3 Hawthorne Drive')).toBeInTheDocument()
+  expect(within(dialog).queryByLabelText('Postage arrangements')).toBeNull()
+  const customer = within(dialog).getByRole('radio', { name: 'Customer pays return postage' })
+  const seller = within(dialog).getByRole('radio', { name: 'Seller pays return postage' })
+  expect(customer).not.toBeChecked()
+  expect(seller).not.toBeChecked()
+  fireEvent.click(within(dialog).getByRole('checkbox'))
+  expect(within(dialog).getByRole('button', { name: 'Confirm authorize' })).toBeDisabled()
+  await confirmAuthorize(dialog)
+  expect(window.adminReturns.action).not.toHaveBeenCalled()
+  fireEvent.click(seller)
+  expect(within(dialog).getByText(RETURN_POSTAGE_INSTRUCTIONS.SELLER)).toBeInTheDocument()
+  await confirmAuthorize(dialog)
+  expect(window.adminReturns.action).toHaveBeenCalledWith(41, 10, 'authorize', {
+    shippingPayer: 'SELLER',
+    postageInstructions: RETURN_POSTAGE_INSTRUCTIONS.SELLER,
+    instructions: returnCase.defaultInstructions!.instructions,
+    rightsReviewed: true,
+  })
+  expect(window.adminReturns.action).toHaveBeenCalledOnce()
+})
+it('sends the fixed customer-pays text for a change-of-mind return and still requires the rights acknowledgement', async () => {
+  const detail = structuredClone(returnCase)
+  detail.submissions[0].lines[0].reason = 'CHANGE_OF_MIND'
+  const dialog = await openAuthorize(detail)
+  fireEvent.click(within(dialog).getByRole('radio', { name: 'Customer pays return postage' }))
+  expect(within(dialog).getByText(RETURN_POSTAGE_INSTRUCTIONS.CUSTOMER)).toBeInTheDocument()
+  expect(within(dialog).getByRole('checkbox')).toBeRequired()
+  fireEvent.click(within(dialog).getByRole('checkbox'))
+  await confirmAuthorize(dialog)
   expect(window.adminReturns.action).toHaveBeenCalledWith(
     41,
     10,
     'authorize',
     expect.objectContaining({
-      shippingPayer: 'SELLER',
+      shippingPayer: 'CUSTOMER',
+      postageInstructions: RETURN_POSTAGE_INSTRUCTIONS.CUSTOMER,
       rightsReviewed: true,
-      postageInstructions: 'Contact support for prepaid return postage.',
     }),
   )
-  expect(window.adminReturns.action).toHaveBeenCalledOnce()
+})
+it.each(['DAMAGED', 'DEFECTIVE', 'WRONG_ITEM', 'NOT_AS_DESCRIBED'] as const)(
+  'keeps customer-paid postage unavailable for %s without preselecting the seller',
+  async (reason) => {
+    const detail = structuredClone(returnCase)
+    detail.submissions[0].lines[0].reason = reason
+    const dialog = await openAuthorize(detail)
+    expect(within(dialog).getByRole('radio', { name: 'Customer pays return postage' })).toBeDisabled()
+    expect(within(dialog).getByRole('radio', { name: 'Seller pays return postage' })).not.toBeChecked()
+    expect(within(dialog).getByText(/seller must cover reasonable return postage/)).toBeInTheDocument()
+  },
+)
+it('keeps both fixed postage texts within the backend contract', () => {
+  for (const text of Object.values(RETURN_POSTAGE_INSTRUCTIONS)) {
+    expect(text.trim().length).toBeGreaterThanOrEqual(10)
+    expect(text.length).toBeLessThanOrEqual(2000)
+  }
 })
 it('records receipt separately from refunds and blocks duplicate submissions', async () => {
   const detail = structuredClone(returnCase)
@@ -195,9 +242,9 @@ it('shows refused actions inside the active modal so the operator can read the e
   )
   fireEvent.click(await screen.findByRole('button', { name: 'Authorize' }))
   const dialog = screen.getByRole('dialog')
-  fireEvent.change(within(dialog).getByLabelText('Postage arrangements'), {
-    target: { value: 'Contact support for prepaid return postage.' },
-  })
+  fireEvent.click(
+    within(dialog).getByRole('radio', { name: 'Seller pays return postage' }),
+  )
   fireEvent.click(within(dialog).getByRole('checkbox'))
   fireEvent.submit(
     within(dialog)

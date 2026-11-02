@@ -9,6 +9,10 @@ import {
   type ReturnQueue,
   type ReturnStatus,
 } from '../electron/return-contract'
+import {
+  RETURN_POSTAGE_INSTRUCTIONS,
+  type ReturnPostagePayer,
+} from './returnPostage'
 import './Returns.css'
 const date = (s: string) => new Date(s).toLocaleString('en-GB')
 const errorMessage = (e: unknown) =>
@@ -346,7 +350,9 @@ export default function Returns({
 }
 export function Instructions({
   value,
+  title = 'Return address and instructions',
 }: {
+  title?: string
   value: {
     address: string[]
     instructions: string
@@ -356,7 +362,7 @@ export function Instructions({
 }) {
   return (
     <aside className="return-instructions">
-      <h4>Return address and instructions</h4>
+      <h4>{title}</h4>
       <address>
         {value.address.map((line, i) => (
           <span key={i}>
@@ -393,8 +399,8 @@ function ReturnDecision({
   onSubmit: (body: Record<string, unknown>) => Promise<void>
   onClose: () => void
 }) {
-  const [payer, setPayer] = useState<'CUSTOMER' | 'SELLER'>('SELLER'),
-    [postage, setPostage] = useState(''),
+  // No default: the owner chooses the legally appropriate payer for every authorisation.
+  const [payer, setPayer] = useState<ReturnPostagePayer | null>(null),
     [instructions, setInstructions] = useState(
       detail.defaultInstructions?.instructions ?? '',
     ),
@@ -417,11 +423,12 @@ function ReturnDecision({
   }, [])
   function submit(e: FormEvent) {
     e.preventDefault()
+    if (action === 'authorize' && !payer) return
     const body: Record<string, unknown> =
       action === 'authorize'
         ? {
             shippingPayer: payer,
-            postageInstructions: postage,
+            postageInstructions: payer ? RETURN_POSTAGE_INSTRUCTIONS[payer] : '',
             instructions,
             rightsReviewed: reviewed,
           }
@@ -467,41 +474,32 @@ function ReturnDecision({
         </p>
         {action === 'authorize' && (
           <>
-            <Instructions
-              value={{
-                address: detail.defaultInstructions?.address ?? [],
-                instructions,
-                postageInstructions: postage,
-                shippingPayer: payer,
-              }}
-            />
-            <label>
-              Return postage paid by
-              <select
-                value={payer}
-                onChange={(e) => setPayer(e.target.value as typeof payer)}
-              >
-                <option value="SELLER">Colorful Life Ltd</option>
-                <option value="CUSTOMER" disabled={fault}>
-                  Customer
-                </option>
-              </select>
-            </label>
-            <p>
-              {fault
-                ? 'Non-conforming goods: seller pays reasonable return costs.'
-                : 'Check the applicable cancellation rights and pre-sale postage disclosure before assigning customer postage.'}
-            </p>
-            <label>
-              Postage arrangements
-              <textarea
-                required
-                minLength={10}
-                maxLength={2000}
-                value={postage}
-                onChange={(e) => setPostage(e.target.value)}
-              />
-            </label>
+            <fieldset className="return-postage">
+              <legend>Return postage</legend>
+              {(['CUSTOMER', 'SELLER'] as const).map((value) => (
+                <label className="return-choice" key={value}>
+                  <input
+                    type="radio"
+                    name="return-postage-payer"
+                    value={value}
+                    required
+                    checked={payer === value}
+                    disabled={value === 'CUSTOMER' && fault}
+                    onChange={() => setPayer(value)}
+                  />
+                  <span>
+                    {value === 'CUSTOMER'
+                      ? 'Customer pays return postage'
+                      : 'Seller pays return postage'}
+                  </span>
+                </label>
+              ))}
+              <p className="return-hint">
+                {fault
+                  ? 'Reported as faulty, damaged, wrong or not as described: the seller must cover reasonable return postage.'
+                  : 'Choose the option that applies under the cancellation rights and the postage terms shown before sale.'}
+              </p>
+            </fieldset>
             <label>
               Return instructions
               <textarea
@@ -512,6 +510,19 @@ function ReturnDecision({
                 onChange={(e) => setInstructions(e.target.value)}
               />
             </label>
+            <Instructions
+              title="Customer will see"
+              value={{
+                address: detail.defaultInstructions?.address ?? [],
+                instructions,
+                ...(payer
+                  ? {
+                      postageInstructions: RETURN_POSTAGE_INSTRUCTIONS[payer],
+                      shippingPayer: payer,
+                    }
+                  : {}),
+              }}
+            />
           </>
         )}
         {action === 'reject' && (
@@ -618,15 +629,17 @@ function ReturnDecision({
           </label>
         )}
         {['authorize', 'reject'].includes(action) && (
-          <label>
+          <label className="return-choice return-ack">
             <input
               type="checkbox"
               required
               checked={reviewed}
               onChange={(e) => setReviewed(e.target.checked)}
             />
-            I reviewed the applicable cancellation/faulty-goods rights and
-            supporting facts.
+            <span>
+              I reviewed the applicable cancellation/faulty-goods rights and
+              supporting facts.
+            </span>
           </label>
         )}
         {action === 'complete' && (
@@ -644,7 +657,10 @@ function ReturnDecision({
           >
             Back
           </button>
-          <button className="button button-primary" disabled={pending}>
+          <button
+            className="button button-primary"
+            disabled={pending || (action === 'authorize' && !payer)}
+          >
             {pending
               ? 'Saving…'
               : `Confirm ${action === 'receive' ? 'receipt' : action}`}
