@@ -120,7 +120,7 @@ it('refund intents share an order slot by design: one Payment per Order, so paym
   await expect(f.service.execute('refund', { ...refund, paymentId: 8 })).rejects.toThrow('saved intent exists')
   expect(f.authenticatedFetch).toHaveBeenCalledTimes(1)
   // A definitive Backend refusal clears only with its explicit no-submission contract.
-  const g = fixture(); g.authenticatedFetch.mockResolvedValueOnce(json({ error: 'REFUND_CAPACITY_EXCEEDED', refundSubmissionDisposition: 'NOT_SUBMITTED' }, 409))
+  const g = fixture(); g.authenticatedFetch.mockImplementationOnce(async (_path,init) => json({ error: 'REFUND_CAPACITY_EXCEEDED', refundSubmissionDisposition: 'NOT_SUBMITTED', refundRequestKey: init.headers['Idempotency-Key'] }, 409))
   await expect(g.service.execute('refund', { ...refund, paymentId: 8 })).rejects.toThrow()
   expect(await g.service.pending()).toEqual([])
   g.authenticatedFetch.mockResolvedValueOnce(json({ refundId: 6, status: 'PROCESSING', amount: '5.00', currency: 'GBP', provider: 'STRIPE' }, 202))
@@ -138,7 +138,7 @@ it('does not infer a definitive refund rejection from 4xx status and keeps the s
 it('releases a definitively unsubmitted £23.99 refund so the operator can correct it to £23.98', async () => {
   const f = fixture()
   const order11 = { orderId: 11, paymentId: 9, amount: 23.99, reason: 'BB-R-11 — Faulty' }
-  f.authenticatedFetch.mockResolvedValueOnce(json({ error: 'REFUND_CAPACITY_EXCEEDED', refundSubmissionDisposition: 'NOT_SUBMITTED' }, 409))
+  f.authenticatedFetch.mockImplementationOnce(async (_path,init) => json({ error: 'REFUND_CAPACITY_EXCEEDED', refundSubmissionDisposition: 'NOT_SUBMITTED', refundRequestKey: init.headers['Idempotency-Key'] }, 409))
   await expect(f.service.execute('refund', order11)).rejects.toThrow()
   expect(await f.service.pending()).toEqual([])
   f.authenticatedFetch.mockResolvedValueOnce(json({ refundId: 12, status: 'PROCESSING', amount: '23.98', currency: 'GBP', provider: 'STRIPE' }, 202))

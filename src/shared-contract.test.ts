@@ -15,8 +15,12 @@ it('preserves structured Backend fulfilment reasons',async()=>{
  expect(await readBackendError(new Response(JSON.stringify(contract.fulfilmentError),{status:409}),'Fallback')).toMatchObject({code:'ORDER_PAYMENT_NOT_VERIFIED',reason:'CANCELLATION_PENDING'})
 })
 it('accepts only an uncontradicted explicit no-refund-submitted error disposition',async()=>{
- const safe=await readBackendError(new Response(JSON.stringify({error:'REFUND_CAPACITY_EXCEEDED',refundSubmissionDisposition:'NOT_SUBMITTED'}),{status:409}),'Fallback')
+ const key='12345678-1234-1234-1234-123456789abc'
+ const safe=await readBackendError(new Response(JSON.stringify({error:'REFUND_CAPACITY_EXCEEDED',refundSubmissionDisposition:'NOT_SUBMITTED',refundRequestKey:key}),{status:409}),'Fallback')
  expect(safe.refundSubmissionDisposition).toBe('NOT_SUBMITTED')
- const contradiction=await readBackendError(new Response(JSON.stringify({error:'REFUND_CAPACITY_EXCEEDED',refundSubmissionDisposition:'NOT_SUBMITTED',refundId:9,status:'PROCESSING'}),{status:409}),'Fallback')
+ expect(safe.refundRequestKey).toBe(key)
+ const contradiction=await readBackendError(new Response(JSON.stringify({error:'REFUND_CAPACITY_EXCEEDED',refundSubmissionDisposition:'NOT_SUBMITTED',refundRequestKey:key,refundId:9,status:'PROCESSING'}),{status:409}),'Fallback')
  expect(contradiction.refundSubmissionDisposition).toBeUndefined()
+ const missing=await readBackendError(new Response(JSON.stringify({error:'REFUND_CAPACITY_EXCEEDED',refundSubmissionDisposition:'NOT_SUBMITTED'}),{status:409}),'Fallback')
+ expect(missing.refundSubmissionDisposition).toBeUndefined()
 })

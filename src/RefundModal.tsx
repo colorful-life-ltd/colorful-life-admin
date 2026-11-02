@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { adminOperations } from './admin-api'
 import { financialHundredths, formatFinancialAmount, refundOutcomeUncertain } from '../electron/order-financials'
 import type { OrderFinancials, RefundView } from '../electron/order-financials'
@@ -6,7 +6,7 @@ import type { OrderDetail } from '../electron/order-contract'
 import type { ReturnCaseView } from '../electron/return-contract'
 import type { Operation, OperatorInput, SafeValue, SavedOperation } from '../electron/operations-contract'
 import type { PaymentEnvironment } from '../electron/payment-environment'
-import { clampRefundCents, completedReturnedItemsCents, orderDeliveryChargeCents, refundCentsText, refundInputCents } from './refund-ux'
+import { clampRefundCents, completedReturnedItemsCents, orderDeliveryChargeCents, refundCentsText, refundInputCents, stripeEnvironmentMismatch } from './refund-ux'
 import './RefundModal.css'
 
 const reasons = [
@@ -30,6 +30,19 @@ function safeValueText(value: SafeValue, depth = 0): string {
   if (Array.isArray(value)) return value.map(v => safeValueText(v, depth + 1)).join(', ')
   return Object.entries(value).map(([key, item]) => `${key.replaceAll('_', ' ')}: ${safeValueText(item, depth + 1)}`).join(' · ')
 }
+function refundGate(financials: OrderFinancials | null, environment: PaymentEnvironment | null, connectionMode: 'direct' | 'remote-sandbox' | null, sessionBlocked: boolean) {
+  const payment = financials?.payment.state === 'ready' ? financials.payment.value : null
+  const refunds = financials?.refunds.state === 'ready' ? financials.refunds.value : null
+  const ready = !!financials && financials.consistent && financials.payment.state === 'ready' && financials.refunds.state === 'ready'
+  let available = 0n
+  try { if (payment) available = financialHundredths(payment.amount, payment.currency) - financialHundredths(payment.refundedAmount, payment.currency) - financialHundredths(payment.reservedRefundAmount, payment.currency) } catch { available = 0n }
+  const env = environment?.stripeEnvironment ?? 'UNKNOWN'
+  const mismatch = stripeEnvironmentMismatch(env, connectionMode)
+  const activeRefund = refunds?.find(r => r.status === 'PROCESSING' || r.reviewRequired || refundOutcomeUncertain(r))
+  const enabled = ready && !!payment && payment.provider === 'STRIPE' && payment.status === 'SUCCEEDED' && !!payment.paidAt
+    && !!payment.paymentIntentReference && available > 0n && !activeRefund && !sessionBlocked && (env === 'TEST' || env === 'LIVE') && !mismatch
+  return { payment, refunds, ready, available, env, mismatch, enabled }
+}
 
 export default function RefundModal({ detail, order, financials, environment, connectionMode, sessionBlocked = false, onClose, onRefresh, onOpenOperatorWorkflows }: {
   detail: ReturnCaseView; order: OrderDetail | null; financials: OrderFinancials | null; environment: PaymentEnvironment | null
@@ -41,31 +54,27 @@ export default function RefundModal({ detail, order, financials, environment, co
   const [amount, setAmount] = useState(''), [reason, setReason] = useState(''), [note, setNote] = useState('')
   const [liveConfirmed, setLiveConfirmed] = useState(false), [error, setError] = useState(''), [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState<SavedOperation | null>(null), [checkingSaved, setCheckingSaved] = useState(false)
+  const [savedNotSubmitted, setSavedNotSubmitted] = useState(false), [replaySaved, setReplaySaved] = useState(false)
   const [result, setResult] = useState<RefundResult | null>(null), [outcomeText, setOutcomeText] = useState('')
   const [finalize, setFinalize] = useState<{ operation: Operation; input: OperatorInput } | null>(null)
   const [reviewText, setReviewText] = useState('')
-  const payment = financials?.payment.state === 'ready' ? financials.payment.value : null
-  const refunds = financials?.refunds.state === 'ready' ? financials.refunds.value : null
-  const availableCents = useMemo(() => {
-    if (!payment) return 0n
-    try { return financialHundredths(payment.amount, payment.currency) - financialHundredths(payment.refundedAmount, payment.currency) - financialHundredths(payment.reservedRefundAmount, payment.currency) }
-    catch { return 0n }
-  }, [payment])
+  const [gateSnapshot, setGateSnapshot] = useState<{financials: OrderFinancials; environment: PaymentEnvironment; connectionMode: 'direct' | 'remote-sandbox' | null} | null>(null)
+  const [gateRefreshFailed, setGateRefreshFailed] = useState(false)
+  const currentFinancials = gateRefreshFailed ? null : gateSnapshot?.financials ?? financials
+  const currentEnvironment = gateRefreshFailed ? null : gateSnapshot?.environment ?? environment
+  const currentConnectionMode = gateRefreshFailed ? null : gateSnapshot?.connectionMode ?? connectionMode
+  const gate = refundGate(currentFinancials, currentEnvironment, currentConnectionMode, sessionBlocked)
+  const { payment, refunds, ready: financialsReady, available: availableCents, env, mismatch, enabled: submitEnabled } = gate
   const returnedCents = order ? completedReturnedItemsCents(detail, order, payment?.currency ?? order.currency) : null
   const deliveryCents = order ? orderDeliveryChargeCents(order) : null
   const inputCents = refundInputCents(amount)
-  const env = environment?.stripeEnvironment ?? 'UNKNOWN'
-  const mismatch = connectionMode === 'remote-sandbox' && env === 'LIVE'
-  const financialsReady = !!financials && financials.consistent && financials.payment.state === 'ready' && financials.refunds.state === 'ready'
-  const activeRefund = refunds?.find(r => r.status === 'PROCESSING' || r.reviewRequired || refundOutcomeUncertain(r))
-  const safeEnvironment = (env === 'TEST' || env === 'LIVE') && !mismatch
   const noPriorLedgerEvidence = financialsReady && !!payment && refunds?.length === 0
     && financialHundredths(payment.refundedAmount, payment.currency) === 0n
     && financialHundredths(payment.reservedRefundAmount, payment.currency) === 0n
-  const submitEnabled = safeEnvironment && financialsReady && !!payment && payment.provider === 'STRIPE'
-    && payment.status === 'SUCCEEDED' && !!payment.paidAt && !!payment.paymentIntentReference
-    && availableCents > 0n && !activeRefund && !sessionBlocked
   const builtReason = `${detail.reference ?? `Order ${detail.orderId}`} — ${reasons.find(([value]) => value === reason)?.[1] ?? ''}${note.trim() ? ` — ${note.trim()}` : ''}`.trim()
+  const savedCents = typeof saved?.input.amount === 'number' ? refundInputCents(saved.input.amount.toFixed(2)) : null
+  const canRetrySaved = !!saved && saved.state === 'uncertain' && savedNotSubmitted && submitEnabled && !!payment
+    && saved.input.orderId === detail.orderId && saved.input.paymentId === payment.id && savedCents !== null && savedCents > 0n && savedCents <= availableCents
 
   useEffect(() => {
     trigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -81,27 +90,54 @@ export default function RefundModal({ detail, order, financials, environment, co
       if (match.state === 'uncertain' || match.state === 'confirmed') {
         setPhase('outcome')
         setOutcomeText(match.state === 'uncertain'
-          ? 'A previous refund request may have reached Stripe. Do not create another request. Use “Check saved request” to retry only that same request.'
-          : 'A previous refund request was accepted by the Backend. Review the current order-level refund records below before finishing this Admin record.')
+          ? 'A previous refund request may have reached Stripe. Check its saved status first. That check reads Backend records only and never submits a refund.'
+          : 'A previous refund request was accepted by the Backend. Refresh or check the same saved record; this status check never submits a refund.')
       }
     }).catch(() => { if (active) setOutcomeText('Saved refund history could not be read. Do not start another refund until it is available.') })
-    return () => { active = false; node?.close(); trigger.current?.focus() }
+    return () => {
+      active = false
+      node?.close()
+      if (trigger.current?.isConnected) trigger.current.focus()
+      else document.getElementById('returns-title')?.focus()
+    }
   }, [detail.orderId])
 
   function close() { if (busy) return; onClose() }
   function setAmountCents(value: bigint) { setAmount(refundCentsText(clampRefundCents(value, availableCents))); setError('') }
+  async function refreshGates() {
+    setGateRefreshFailed(true)
+    try {
+      const [f, e, c] = await Promise.allSettled([
+        window.adminOrders.financials(detail.orderId),
+        window.adminOrders.paymentEnvironment(),
+        window.adminConnection?.status?.(),
+      ])
+      if (f.status !== 'fulfilled' || e.status !== 'fulfilled') throw new Error('Payment environment and refund records could not both be refreshed.')
+      const snapshot = { financials: f.value, environment: e.value, connectionMode: c.status === 'fulfilled' ? c.value?.mode ?? null : null }
+      setGateSnapshot(snapshot); setGateRefreshFailed(false)
+      return refundGate(snapshot.financials, snapshot.environment, snapshot.connectionMode, sessionBlocked)
+    } catch {
+      setGateSnapshot(null); setGateRefreshFailed(true)
+      throw new Error('Could not refresh the Stripe environment and payment records. Refund submission is blocked; refresh and try again.')
+    }
+  }
   function addDelivery() {
     if (deliveryCents === null) return
     const current = inputCents ?? 0n
+    if (current + deliveryCents > availableCents) setOutcomeText(`Delivery charge was capped at the remaining refundable balance of ${formatFinancialAmount(refundCentsText(availableCents), 'GBP')}.`)
+    else setOutcomeText('')
     setAmountCents(current + deliveryCents)
   }
-  function continueToReview(event: FormEvent) {
+  async function continueToReview(event: FormEvent) {
     event.preventDefault(); setError('')
-    if (!submitEnabled) { setError(mismatch ? 'Sandbox is connected to a LIVE Stripe environment. Refund is blocked.' : 'Refund unavailable until payment, environment and refund records are verified.'); return }
     if (inputCents === null) { setError('Enter an amount using pounds and pence, for example 23.98.'); return }
     if (inputCents <= 0n) { setError('Refund amount must be greater than £0.00.'); return }
-    if (inputCents > availableCents) { setError(`Amount exceeds the available ${formatFinancialAmount(refundCentsText(availableCents), 'GBP')}.`); return }
     if (!reason) { setError('Choose a refund reason.'); return }
+    let current
+    try { current = await refreshGates() } catch (e) { setError(e instanceof Error ? e.message : 'Refund checks could not be refreshed.'); return }
+    if (!current.enabled) { setError(current.mismatch ? 'Sandbox is connected to a LIVE Stripe environment. Refund is blocked.' : 'Refund unavailable until payment, environment and refund records are verified.'); return }
+    if (inputCents > current.available) { setError(`Amount exceeds the available ${formatFinancialAmount(refundCentsText(current.available < 0n ? 0n : current.available), 'GBP')}.`); return }
+    setReplaySaved(false)
     setPhase('confirm')
   }
 
@@ -130,10 +166,12 @@ export default function RefundModal({ detail, order, financials, environment, co
       setError('')
       if (disposition === 'NOT_SUBMITTED') {
         setPhase('edit')
+        setReplaySaved(false); setSavedNotSubmitted(false)
         setOutcomeText('The Backend confirmed this request was not sent to Stripe. Correct the amount or details and review again.')
         setError(message)
         const intents = await adminOperations.pending().catch(() => [])
         setSaved(intents.find(s => s.operation === 'refund' && Number(s.input.orderId) === detail.orderId) ?? null)
+        try { await refreshGates() } catch { /* gate state remains closed */ }
       } else {
         setPhase('outcome')
         setOutcomeText('We could not verify whether this request reached Stripe. The original saved request remains in place; do not submit a new refund.')
@@ -144,18 +182,67 @@ export default function RefundModal({ detail, order, financials, environment, co
     } finally { submitting.current = false; setBusy(false) }
   }
 
-  function submitRefund(event: FormEvent) {
-    event.preventDefault()
-    if (!submitEnabled || !payment || !inputCents || inputCents <= 0n || inputCents > availableCents || !reason) return
-    if (env === 'LIVE' && !liveConfirmed) { setError('Confirm that this is a real-money refund before continuing.'); return }
-    void execute('refund', { orderId: detail.orderId, paymentId: payment.id, amount: Number(inputCents) / 100, reason: builtReason })
+  async function submitRefund(event?: FormEvent) {
+    event?.preventDefault()
+    setError('')
+    let current
+    try { current = await refreshGates() } catch (e) { setError(e instanceof Error ? e.message : 'Refund checks could not be refreshed.'); return }
+    if (!current.enabled || !current.payment) { setError(current.mismatch ? 'Sandbox is connected to a LIVE Stripe environment. Refund is blocked.' : 'Refund unavailable until payment, environment and refund records are verified.'); return }
+    const input = replaySaved ? saved?.input : { orderId: detail.orderId, paymentId: current.payment.id, amount: inputCents === null ? 0 : Number(inputCents) / 100, reason: builtReason }
+    if (!input) { setError('The saved refund request is unavailable.'); return }
+    const cents = refundInputCents(typeof input.amount === 'number' ? input.amount.toFixed(2) : '')
+    if (!input || cents === null || cents <= 0n || cents > current.available || input.orderId !== detail.orderId || input.paymentId !== current.payment.id) {
+      setError(`This saved amount is not within the current available refund capacity of ${formatFinancialAmount(refundCentsText(current.available < 0n ? 0n : current.available), 'GBP')}. Check records or correct the amount.`); return
+    }
+    if (!replaySaved && !reason) { setError('Choose a refund reason.'); return }
+    if (current.env === 'LIVE' && !liveConfirmed) { setError('Confirm that this is a real-money refund before continuing.'); return }
+    await execute('refund', input, replaySaved)
   }
 
   async function checkSaved() {
     if (!saved || saved.operation !== 'refund') return
-    setCheckingSaved(true)
-    await execute('refund', saved.input, true)
-    setCheckingSaved(false)
+    setCheckingSaved(true); setError(''); setSavedNotSubmitted(false)
+    try {
+      const status = await adminOperations.checkRefundStatus(saved.input, saved.key)
+      if (status.state === 'NOT_SUBMITTED') {
+        setSavedNotSubmitted(false)
+        try {
+          await refreshGates()
+          setSavedNotSubmitted(true)
+          setOutcomeText('The Backend confirmed that no refund was created for this saved request. This check did not submit a refund. You may retry the same amount after review, or correct it after the confirmation below.')
+        } catch (e) { setError(e instanceof Error ? e.message : 'Current payment gates could not be refreshed.') }
+      } else {
+        const parsed = parseRefundResult(status.refund as unknown as SafeValue)
+        if (!parsed) throw new Error('The Backend refund record did not match the expected format. Keep the saved request for review.')
+        setResult(parsed); setSaved({ ...saved, state: 'confirmed' }); setOutcomeText('An authoritative Backend refund record was found for this saved request. This status check did not submit or retry a refund.')
+        setPhase('outcome'); setSavedNotSubmitted(false)
+      }
+    } catch (e) {
+      setOutcomeText('The saved refund status could not be verified. The request remains unchanged; do not submit a new refund.')
+      setError(e instanceof Error ? e.message : 'Saved refund status could not be verified.')
+    } finally { setCheckingSaved(false) }
+  }
+  async function startSavedReplay() {
+    if (!saved || !savedNotSubmitted || saved.state !== 'uncertain') return
+    setError('')
+    let current
+    try { current = await refreshGates() } catch (e) { setError(e instanceof Error ? e.message : 'Refund checks could not be refreshed.'); return }
+    const savedAmount = typeof saved.input.amount === 'number' ? refundInputCents(saved.input.amount.toFixed(2)) : null
+    if (!current.enabled || !current.payment || saved.input.orderId !== detail.orderId || saved.input.paymentId !== current.payment.id || savedAmount === null || savedAmount > current.available) {
+      setError(current.mismatch ? 'Sandbox is connected to LIVE Stripe. The saved refund cannot be retried.' : `The saved refund cannot be retried safely. Current available balance: ${formatFinancialAmount(refundCentsText(current.available < 0n ? 0n : current.available), 'GBP')}.`)
+      return
+    }
+    setAmount(typeof saved.input.amount === 'number' ? saved.input.amount.toFixed(2) : ''); setReplaySaved(true); setLiveConfirmed(false); setPhase('confirm')
+  }
+  async function editUnsubmittedSaved() {
+    if (!saved || !savedNotSubmitted) return
+    setBusy(true); setError('')
+    try {
+      await adminOperations.finishUnsubmittedRefund(saved.input, saved.key)
+      setSaved(null); setSavedNotSubmitted(false); setReplaySaved(false); setPhase('edit'); setAmount(''); setReason('')
+      setOutcomeText('The Backend rechecked the original request and confirmed no refund was submitted. Enter the corrected amount and review it before any new request.')
+    } catch (e) { setError(e instanceof Error ? e.message : 'The saved request could not be safely released.') }
+    finally { setBusy(false) }
   }
   async function reconcile(refund: RefundView) {
     await execute('reconcile', { orderId: detail.orderId, refundId: refund.id })
@@ -168,9 +255,15 @@ export default function RefundModal({ detail, order, financials, environment, co
   }
   async function finishAndClose() {
     if (busy) return
-    if (saved?.state === 'confirmed') {
+    if (saved?.state === 'confirmed' && !result) {
       setError('Check the same saved request first so its authoritative refund result is displayed before finishing this Admin record.')
       return
+    }
+    if (saved?.state === 'confirmed' && result) {
+      setBusy(true)
+      try { await adminOperations.finish('refund', saved.input); setSaved(null) }
+      catch (e) { setError(e instanceof Error ? e.message : 'The saved refund result could not be finished.'); setBusy(false); return }
+      setBusy(false)
     }
     if (saved?.state === 'rejected') {
       if (!noPriorLedgerEvidence) { setError('The authoritative payment records do not prove this rejected attempt created no refund. Keep it and use Operator workflows for review.'); return }
@@ -220,14 +313,17 @@ export default function RefundModal({ detail, order, financials, environment, co
         {refund.status === 'PROCESSING' && <span> Pending or unresolved. Do not start another refund.</span>}
         {refund.reviewRequired && <span> Needs review before another refund.</span>}
         {(refund.reviewRequired || refundOutcomeUncertain(refund)) && <button type="button" className="refund-v2__text-button" disabled={busy || sessionBlocked} onClick={() => void openReview(refund)}>View refund review</button>}
-        {refund.status === 'PROCESSING' && !refund.reviewRequired && <>{environment?.refundReconciliationEnabled
+        {refund.status === 'PROCESSING' && !refund.reviewRequired && <>{currentEnvironment?.refundReconciliationEnabled
           ? <button type="button" className="refund-v2__text-button" disabled={busy || sessionBlocked} onClick={() => void reconcile(refund)}>Check refund status</button>
           : <span> Status checking is currently unavailable; the refund remains pending. Use Operator workflows for evidence review.</span>}</>}
       </li>)}</ul></section>}
       {reviewText && <p className="refund-v2__review" role="status">{reviewText}</p>}
-      {saved?.state === 'uncertain' && <section className="refund-v2__outcome" role="alert"><h3>Refund status needs checking</h3><p>{outcomeText}</p><p>Saved amount: {typeof saved.input.amount === 'number' ? formatFinancialAmount(String(saved.input.amount), 'GBP') : 'unknown'}. The same saved request will be used.</p><button type="button" className="button button-primary" disabled={busy || checkingSaved || sessionBlocked} onClick={() => void checkSaved()}>{checkingSaved || busy ? 'Checking…' : 'Check saved request'}</button></section>}
+      {saved?.state === 'uncertain' && <section className="refund-v2__outcome" role="alert"><h3>{savedNotSubmitted ? 'No refund was submitted' : 'Refund status needs checking'}</h3><p>{outcomeText}</p>{error && <p role="alert">{error}</p>}<p>Saved amount: {typeof saved.input.amount === 'number' ? formatFinancialAmount(saved.input.amount.toFixed(2), 'GBP') : 'unknown'}.</p>
+        {!savedNotSubmitted && <button type="button" className="button button-primary" disabled={busy || checkingSaved} onClick={() => void checkSaved()}>{checkingSaved ? 'Checking records…' : 'Check saved refund status'}</button>}
+        {savedNotSubmitted && <><button type="button" className="button button-secondary" disabled={busy || checkingSaved || !canRetrySaved} onClick={() => void startSavedReplay()}>{`Review retry ${savedCents !== null ? formatFinancialAmount(refundCentsText(savedCents), 'GBP') : 'saved refund'}`}</button><button type="button" className="button button-secondary" disabled={busy || checkingSaved} onClick={() => void editUnsubmittedSaved()}>Correct saved amount</button>{!canRetrySaved && <p role="status">A retry is unavailable until current environment, payment and refundable capacity checks all pass. Correcting the amount rechecks the saved request with the Backend first.</p>}</>}
+      </section>}
       {saved?.state === 'rejected' && <section className="refund-v2__outcome"><h3>Previous request was declined</h3><p>{outcomeText || 'This local record is from an earlier Admin version. It can be cleared only when current, consistent payment records prove that no refund was created or reserved.'}</p><button type="button" className="button button-secondary" disabled={busy || sessionBlocked || !noPriorLedgerEvidence} onClick={() => void finishAndClose()}>{busy ? 'Verifying…' : 'Clear declined request'}</button>{!noPriorLedgerEvidence && <p role="status">Refund or reservation evidence exists, or the financial read is incomplete. Keep the saved request and review it.</p>}</section>}
-      {saved?.state === 'confirmed' && <section className="refund-v2__outcome" role="status"><h3>Previous request recorded</h3><p>{outcomeText}</p><p>Check the original request key to display its authoritative refund again. No new key or amount will be created.</p><button type="button" className="button button-primary" disabled={busy || checkingSaved || sessionBlocked} onClick={() => void checkSaved()}>{checkingSaved || busy ? 'Checking…' : 'Check saved request'}</button></section>}
+      {saved?.state === 'confirmed' && <section className="refund-v2__outcome" role="status"><h3>Previous refund recorded</h3><p>{outcomeText}</p>{result && <p>Refund #{result.refundId} · {result.status} · {formatFinancialAmount(result.amount, result.currency)}</p>}<p>Refreshing this saved status reads Backend records only; it does not resubmit the refund.</p><button type="button" className="button button-primary" disabled={busy || checkingSaved} onClick={() => void checkSaved()}>{checkingSaved ? 'Refreshing status…' : 'Refresh saved refund status'}</button></section>}
       {phase === 'outcome' && !saved && <section className="refund-v2__outcome" role={result?.status === 'FAILED' ? 'status' : 'status'}>
         <h3>{result?.reviewRequired ? 'Refund needs review' : result?.status === 'SUCCEEDED' ? 'Refund succeeded' : result?.status === 'PROCESSING' ? 'Refund pending' : result?.status === 'FAILED' ? 'Refund failed' : 'Refund status is unverified'}</h3>
         {result ? <p>Refund #{result.refundId} · {result.status} · {formatFinancialAmount(result.amount, result.currency)}{result.resolutionCode ? ` · ${result.resolutionCode.replaceAll('_', ' ').toLowerCase()}` : ''}</p> : <p>{outcomeText}</p>}
@@ -245,7 +341,7 @@ export default function RefundModal({ detail, order, financials, environment, co
           <button type="button" className="button button-secondary" disabled={!submitEnabled || availableCents <= 0n || busy} onClick={() => setAmountCents(availableCents)}>Use full available amount</button>
         </div>
         {returnedCents !== null && <p>Value of completed returned items: {formatFinancialAmount(refundCentsText(returnedCents), payment?.currency ?? 'GBP')} (order-level estimate).</p>}
-        {deliveryCents !== null ? <p>Delivery charge in the frozen order record: {formatFinancialAmount(refundCentsText(deliveryCents), payment?.currency ?? 'GBP')}.</p> : <p>Delivery charge is unavailable in the frozen order record; enter any additional delivery amount only after verifying it separately.</p>}
+        {deliveryCents !== null ? <p>Delivery charge in the frozen order record: {formatFinancialAmount(refundCentsText(deliveryCents), payment?.currency ?? 'GBP')}. Adding it is capped at the current refundable balance.</p> : <p>Delivery charge is unavailable in the frozen order record; enter any additional delivery amount only after verifying it separately.</p>}
         <label htmlFor="refund-v2-reason">Reason</label>
         <select id="refund-v2-reason" value={reason} disabled={!submitEnabled || busy} onChange={event => setReason(event.target.value)}>
           <option value="">Choose a reason</option>{reasons.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -260,7 +356,7 @@ export default function RefundModal({ detail, order, financials, environment, co
           <div><dt>Amount</dt><dd>{inputCents !== null ? formatFinancialAmount(refundCentsText(inputCents), 'GBP') : 'Invalid amount'}</dd></div>
           <div><dt>Payment</dt><dd>{payment.paymentIntentReference ?? 'Unavailable'}</dd></div>
           <div><dt>Order / return</dt><dd>#{detail.orderId} · {detail.reference ?? 'reference unavailable'}</dd></div>
-          <div><dt>Reason</dt><dd>{builtReason}</dd></div>
+          <div><dt>Reason</dt><dd>{replaySaved ? String(saved?.input.reason ?? '') : builtReason}</dd></div>
           <div><dt>Available after this refund</dt><dd>{inputCents !== null ? formatFinancialAmount(refundCentsText(availableCents - inputCents), 'GBP') : 'Unavailable'}</dd></div>
         </dl>
         {liveWarning && <label className="refund-v2__live-confirm"><input type="checkbox" checked={liveConfirmed} onChange={event => setLiveConfirmed(event.target.checked)} disabled={busy} />I understand this LIVE Stripe refund moves real money.</label>}
@@ -270,8 +366,8 @@ export default function RefundModal({ detail, order, financials, environment, co
     </div>
     <footer className="refund-v2__footer">
       {phase === 'edit' && <><button type="button" className="button button-secondary" onClick={close} disabled={busy}>Cancel</button><button type="submit" form="refund-v2-form" className="button button-primary" disabled={!submitEnabled || busy || !showNewRefundForm}>Continue</button></>}
-      {phase === 'confirm' && <><button type="button" className="button button-secondary" disabled={busy} onClick={() => { setPhase('edit'); setLiveConfirmed(false) }}>Back</button><button type="button" className="button button-primary" disabled={busy || !submitEnabled || env === 'LIVE' && !liveConfirmed} onClick={submitRefund}>{busy ? 'Sending refund…' : `Refund ${inputCents !== null ? formatFinancialAmount(refundCentsText(inputCents), 'GBP') : 'amount'}`}</button></>}
-      {phase === 'outcome' && <><button type="button" className="button button-secondary" disabled={busy} onClick={() => void onRefresh()}>Refresh records</button><button type="button" className="button button-secondary" disabled={busy} onClick={onOpenOperatorWorkflows}>Operator workflows</button><button type="button" className="button button-primary" disabled={busy || !!saved && saved.state !== 'rejected' || !!saved && saved.state === 'rejected' && !noPriorLedgerEvidence} onClick={() => void finishAndClose()}>{busy ? 'Saving…' : 'Done'}</button></>}
+      {phase === 'confirm' && <><button type="button" className="button button-secondary" disabled={busy} onClick={() => { setPhase(replaySaved ? 'outcome' : 'edit'); setReplaySaved(false); setLiveConfirmed(false) }}>Back</button><button type="button" className="button button-primary" disabled={busy || !submitEnabled || env === 'LIVE' && !liveConfirmed} onClick={() => void submitRefund()}>{busy ? 'Sending refund…' : replaySaved ? `Retry saved refund ${inputCents !== null ? formatFinancialAmount(refundCentsText(inputCents), 'GBP') : 'amount'}` : `Refund ${inputCents !== null ? formatFinancialAmount(refundCentsText(inputCents), 'GBP') : 'amount'}`}</button></>}
+      {phase === 'outcome' && <><button type="button" className="button button-secondary" disabled={busy} onClick={() => void onRefresh()}>Refresh records</button><button type="button" className="button button-secondary" disabled={busy} onClick={onOpenOperatorWorkflows}>Operator workflows</button><button type="button" className="button button-primary" disabled={busy || saved?.state === 'uncertain' || saved?.state === 'confirmed' && !result || saved?.state === 'rejected' && !noPriorLedgerEvidence} onClick={() => void finishAndClose()}>{busy ? 'Saving…' : 'Done'}</button></>}
     </footer>
   </dialog>
 }

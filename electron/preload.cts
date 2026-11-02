@@ -122,6 +122,8 @@ const adminOperations: AdminOperationsApi = {
   pending: () => forwardIpcResult(ipcRenderer.invoke('admin-operations:pending')),
   finish: (operation,input) => forwardIpcResult(ipcRenderer.invoke('admin-operations:finish',operation,input)),
   resolve: (operation,input,decision,note) => forwardIpcResult(ipcRenderer.invoke('admin-operations:resolve',operation,input,decision,note)),
+  checkRefundStatus: (input,key) => forwardIpcResult(ipcRenderer.invoke('admin-operations:check-refund-status',input,key)),
+  finishUnsubmittedRefund: (input,key) => forwardIpcResult(ipcRenderer.invoke('admin-operations:finish-unsubmitted-refund',input,key)),
 }
 contextBridge.exposeInMainWorld('adminOperations',adminOperations)
 

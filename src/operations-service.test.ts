@@ -45,6 +45,43 @@ it('blocks uncertain non-idempotent security changes rather than blindly replayi
   await expect(f.service.execute('securityReview',stock)).rejects.toThrow('does not guarantee replay')
   expect(f.authenticatedFetch).toHaveBeenCalledTimes(1)
 })
+it('releases an uncertain refund only after an exact-key NOT_SUBMITTED check and permits a corrected new request',async()=>{
+  const f=fixture(),first={orderId:41,paymentId:7,amount:23.99,reason:'Return correction'}
+  f.authenticatedFetch.mockRejectedValueOnce(new Error('network unavailable'))
+  await expect(f.service.execute('refund',first)).rejects.toThrow('network unavailable')
+  const original=(await f.service.pending())[0]
+  expect(original).toMatchObject({operation:'refund',state:'uncertain',input:first})
+  const proof=()=>new Response(JSON.stringify({state:'NOT_SUBMITTED',requestKey:original.key}))
+  f.authenticatedFetch.mockResolvedValueOnce(proof()).mockResolvedValueOnce(proof())
+  expect(await f.service.checkRefundStatus(first,original.key)).toEqual({state:'NOT_SUBMITTED'})
+  await f.service.finishUnsubmittedRefund(first,original.key)
+  expect(await f.service.pending()).toEqual([])
+  f.authenticatedFetch.mockResolvedValueOnce(new Response(JSON.stringify({refundId:91,status:'PROCESSING',amount:'23.98',currency:'GBP',provider:'STRIPE'})))
+  await f.service.execute('refund',{...first,amount:23.98})
+  const corrected=(await f.service.pending())[0]
+  expect(corrected).toMatchObject({state:'confirmed',input:{...first,amount:23.98}})
+  expect(corrected.key).not.toBe(original.key)
+  expect(f.authenticatedFetch.mock.calls.filter(call=>call[1]?.method==='GET')).toHaveLength(2)
+  expect(f.authenticatedFetch.mock.calls[1][1].headers['Idempotency-Key']).toBe(original.key)
+  expect(f.authenticatedFetch.mock.calls[2][1].headers['Idempotency-Key']).toBe(original.key)
+  expect(f.authenticatedFetch.mock.calls[3][1].headers['Idempotency-Key']).toBe(corrected.key)
+})
+it('keeps an uncertain refund when NOT_SUBMITTED evidence is missing, contradictory or for another key',async()=>{
+  for(const body of [
+    {state:'NOT_SUBMITTED',requestKey:'different-key'},
+    {state:'NOT_SUBMITTED',requestKey:'12345678-1234-1234-1234-123456789abc',refundId:9},
+    {state:'UNKNOWN',requestKey:'12345678-1234-1234-1234-123456789abc'},
+  ]){
+    const f=fixture(),payload={orderId:41,paymentId:7,amount:5,reason:'Refund test request'}
+    f.authenticatedFetch.mockRejectedValueOnce(new Error('network unavailable'))
+    await expect(f.service.execute('refund',payload)).rejects.toThrow()
+    const saved=(await f.service.pending())[0]
+    f.authenticatedFetch.mockResolvedValueOnce(new Response(JSON.stringify({...body,requestKey:body.requestKey==='12345678-1234-1234-1234-123456789abc'?saved.key:body.requestKey})))
+    await expect(f.service.checkRefundStatus(payload,saved.key)).rejects.toThrow()
+    await expect(f.service.finishUnsubmittedRefund(payload,saved.key)).rejects.toThrow()
+    expect(await f.service.pending()).toMatchObject([{key:saved.key,state:'uncertain'}])
+  }
+})
 it('requires ADMIN and strips private provider outcomes/keys from all returned data',async()=>{
   const f=fixture();f.restore.mockResolvedValueOnce({user:{id:2,role:'CUSTOMER'}})
   await expect(f.service.read('audit',{orderId:41})).rejects.toThrow('ADMIN')

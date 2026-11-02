@@ -1,6 +1,10 @@
 import ConditionConversion from './ConditionConversion'
 import { useEffect, useRef, useState } from 'react'
 import { adminOperations } from './admin-api'
+import { adminOrders, adminConnection } from './admin-api'
+import { financialHundredths, formatFinancialAmount } from '../electron/order-financials'
+import { stripeEnvironmentMismatch } from './refund-ux'
+import type { PaymentEnvironment } from '../electron/payment-environment'
 import { operations, type Field, type InvestigationDecision, type Operation, type OperationSpec, type OperatorInput, type SafeValue, type SavedOperation } from '../electron/operations-contract'
 const message = (e: unknown) => e instanceof Error ? e.message : 'Operator request failed. Refresh authoritative history.'
 const label = (key: string) => key.replace(/([A-Z])/g,' $1').replaceAll('_',' ')
@@ -20,6 +24,8 @@ export default function Operations({ sessionBlocked = false, orderId, listingId,
   const [saved,setSaved] = useState<SavedOperation[]>([]), [result,setResult] = useState<SafeValue|null>(null)
   const [investigating,setInvestigating] = useState<SavedOperation|null>(null), [decision,setDecision] = useState<InvestigationDecision|''>(''), [note,setNote] = useState('')
   const [error,setError] = useState(''), [busy,setBusy] = useState(false), [confirm,setConfirm] = useState(false)
+  const [refundLiveConfirmed,setRefundLiveConfirmed] = useState(false), [savedRefundKey,setSavedRefundKey] = useState<string|null>(null)
+  const [refundEnvironment,setRefundEnvironment] = useState<PaymentEnvironment|null>(null)
   const lock = useRef(false), generation = useRef(0)
   const spec: OperationSpec = operations[op]
   useEffect(() => {
@@ -37,7 +43,7 @@ export default function Operations({ sessionBlocked = false, orderId, listingId,
     catch (e) { setError(message(e)) }
     finally { await refreshSaved(); lock.current = false; setBusy(false) }
   }
-  function restore(s: SavedOperation) { if((operations[s.operation] as OperationSpec).retired){setError('Use the Returns workspace; the saved legacy intent remains available for investigation.');return} setOp(s.operation); setValues(Object.fromEntries(Object.entries(s.input).map(([k,v]) => [k,Array.isArray(v) ? v.join('\n') : v === null ? '' : String(v)]))); setConfirm(false); setError('') }
+  function restore(s: SavedOperation) { if((operations[s.operation] as OperationSpec).retired){setError('Use the Returns workspace; the saved legacy intent remains available for investigation.');return} setOp(s.operation); setValues(Object.fromEntries(Object.entries(s.input).map(([k,v]) => [k,Array.isArray(v) ? v.join('\n') : v === null ? '' : String(v)]))); setSavedRefundKey(s.operation==='refund'?s.key:null); setConfirm(false); setRefundLiveConfirmed(false); setError('') }
   const run = async () => {
     if (lock.current || sessionBlocked || (spec.method !== 'GET' && !confirm)) return
     const input: OperatorInput = {}
@@ -46,6 +52,36 @@ export default function Operations({ sessionBlocked = false, orderId, listingId,
       if (f.optional && !v.trim()) continue
       if (!v.trim() && (f.choose || f.options)) { setError(`Choose ${f.label}. No request was sent.`); return }
       input[f.name] = ['id','integer','money'].includes(f.type) ? Number(v) : f.type === 'boolean' ? v === 'true' : f.type === 'references' ? v.split('\n').map(s => s.trim()).filter(Boolean) : v
+    }
+    if (op === 'refund') {
+      const order = input.orderId, paymentId = input.paymentId, amountText = values.amount ?? ''
+      if (typeof order !== 'number' || typeof paymentId !== 'number' || !/^(0|[1-9]\d{0,9})(\.\d{1,2})?$/.test(amountText)) { setError('Enter a valid order, payment and amount before reviewing this refund.'); return }
+      let environment: PaymentEnvironment, financial
+      let connectionMode: 'direct'|'remote-sandbox'|null
+      try {
+        const [envResult, financeResult, connectionResult] = await Promise.all([
+          adminOrders.paymentEnvironment(), adminOrders.financials(order), adminConnection?.status?.() ?? Promise.resolve(null),
+        ])
+        environment = envResult; financial = financeResult; connectionMode = connectionResult?.mode ?? null
+      } catch { setError('Stripe environment and payment records could not be refreshed. Refund submission is blocked.'); return }
+      setRefundEnvironment(environment)
+      const payment = financial.payment.state === 'ready' ? financial.payment.value : null
+      const refunds = financial.refunds.state === 'ready' ? financial.refunds.value : null
+      let available = 0n, requested = 0n
+      try {
+        if (payment) available = financialHundredths(payment.amount, payment.currency) - financialHundredths(payment.refundedAmount, payment.currency) - financialHundredths(payment.reservedRefundAmount, payment.currency)
+        requested = financialHundredths(amountText, 'GBP')
+      } catch { available = -1n }
+      const mismatch = stripeEnvironmentMismatch(environment.stripeEnvironment, connectionMode)
+      if (!financial.consistent || !payment || !refunds || payment.id !== paymentId || payment.provider !== 'STRIPE' || payment.currency !== 'GBP'
+        || payment.status !== 'SUCCEEDED' || !payment.paidAt || !payment.paymentIntentReference || available <= 0n
+        || refunds.some(r => r.status === 'PROCESSING' || r.reviewRequired || r.resolutionCode !== null && r.resolutionCode !== `REFUND_${r.status}`)
+        || !['TEST','LIVE'].includes(environment.stripeEnvironment) || mismatch) {
+        setError(mismatch ? 'Sandbox is reporting LIVE Stripe. Refund submission is blocked.' : 'Payment, Stripe environment or refundable balance could not be safely verified. Refund submission is blocked.')
+        return
+      }
+      if (requested <= 0n || requested > available) { const safeAvailable=available<0n?0n:available; const major=`${safeAvailable/100n}.${String(safeAvailable%100n).padStart(2,'0')}`; setError(`Enter an amount up to the verified remaining balance of ${formatFinancialAmount(major, 'GBP')}.`); return }
+      if (environment.stripeEnvironment === 'LIVE' && !refundLiveConfirmed) { setError('Confirm the real-money refund explicitly before submission.'); return }
     }
     lock.current = true; setBusy(true); setError(''); setResult(null)
     const current = generation.current
@@ -84,12 +120,13 @@ export default function Operations({ sessionBlocked = false, orderId, listingId,
       <label>Investigation evidence (at least 10 characters)<textarea required value={note} onChange={e => setNote(e.target.value)} /></label>
       <button type="submit" disabled={!decision || note.trim().length < 10}>Record outcome and clear intent</button><button type="button" onClick={() => setInvestigating(null)}>Cancel</button>
     </fieldset></form>}
-    {!onlyOperation && <label>Workflow<select disabled={busy} value={op} onChange={e => {setOp(e.target.value as Operation);setConfirm(false);setResult(null);setError('')}}>{(['Orders','Inventory','Products','Reviews'] as const).map(group => <optgroup key={group} label={group}>{(Object.entries(operations) as [Operation,OperationSpec][]).filter(([,s])=>s.group===group&&!s.retired).map(([key,s]) => <option key={key} value={key}>{s.label}</option>)}</optgroup>)}</select></label>}
+    {!onlyOperation && <label>Workflow<select disabled={busy} value={op} onChange={e => {setOp(e.target.value as Operation);setConfirm(false);setRefundLiveConfirmed(false);setSavedRefundKey(null);setRefundEnvironment(null);setResult(null);setError('')}}>{(['Orders','Inventory','Products','Reviews'] as const).map(group => <optgroup key={group} label={group}>{(Object.entries(operations) as [Operation,OperationSpec][]).filter(([,s])=>s.group===group&&!s.retired).map(([key,s]) => <option key={key} value={key}>{s.label}</option>)}</optgroup>)}</select></label>}
     {spec.help && <p>{spec.help}</p>}
     <form onSubmit={e => {e.preventDefault();void run()}}><fieldset disabled={busy || sessionBlocked}>
       {spec.fields.map(f => <label key={f.name}>{f.label}{f.options || f.type === 'boolean' ? <select required={!f.optional && (f.choose || f.type === 'boolean')} value={values[f.name] ?? choices(f)[0]} onChange={e=>{setValues(v=>({...v,[f.name]:e.target.value}));setConfirm(false)}}>{choices(f).map(v=><option key={v} value={v}>{choiceLabel(f,v)}</option>)}</select> : f.type === 'references' ? <textarea required value={values[f.name] ?? ''} onChange={e=>{setValues(v=>({...v,[f.name]:e.target.value}));setConfirm(false)}} /> : <input required={!f.optional} type={['id','integer','money'].includes(f.type) ? 'number' : 'text'} min={f.type==='integer' ? 0 : f.type==='money' ? 0.01 : f.type==='id' ? 1 : undefined} step={f.type==='money' ? '0.01' : 1} minLength={f.type==='reason' ? 10 : undefined} maxLength={1000} value={values[f.name] ?? ''} onChange={e=>{setValues(v=>({...v,[f.name]:e.target.value}));setConfirm(false)}} />}</label>)}
+      {op === 'refund' && refundEnvironment?.stripeEnvironment === 'LIVE' && <label><input type="checkbox" checked={refundLiveConfirmed} onChange={e=>setRefundLiveConfirmed(e.target.checked)} required />I confirm this LIVE Stripe refund may move real money.</label>}
       {spec.method !== 'GET' && <label><input type="checkbox" checked={confirm} onChange={e=>setConfirm(e.target.checked)} required />I have checked this intent, identity and evidence and confirm this action.</label>}
-      <button type="submit" disabled={busy || sessionBlocked || (spec.method!=='GET' && !confirm)}>{busy ? 'Waiting for authoritative result…' : spec.label}</button>
+      <button type="submit" disabled={busy || sessionBlocked || (spec.method!=='GET' && !confirm)}>{busy ? 'Waiting for authoritative result…' : op==='refund' && savedRefundKey ? `Submit saved refund £${values.amount || '0.00'}` : spec.label}</button>
     </fieldset></form>
     {spec.group === 'Inventory' && <ConditionConversion disabled={sessionBlocked || busy} />}
     {error && <p role="alert">{error}</p>}

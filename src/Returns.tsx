@@ -84,7 +84,7 @@ export default function Returns({
             window.adminOrders.financials(navigation.orderId),
             window.adminOrders.get(navigation.orderId),
             window.adminOrders.paymentEnvironment(),
-            window.adminConnection!.status(),
+            window.adminConnection?.status?.() ?? Promise.resolve(null),
           ])
           if (active && d.status === 'fulfilled') setDetail(d.value)
           else if (active && d.status === 'rejected') throw d.reason
@@ -92,7 +92,7 @@ export default function Returns({
           else if (active && f.status === 'rejected') setFinancials(null)
           if (active && o.status === 'fulfilled') setOrderDetail(o.value)
           if (active && e.status === 'fulfilled') setPaymentEnvironment(e.value)
-          if (active && c.status === 'fulfilled') setConnectionMode(c.value.mode)
+          if (active && c.status === 'fulfilled') setConnectionMode(c.value?.mode ?? null)
         }
       } catch (e) {
         if (active) setError(errorMessage(e))
@@ -136,12 +136,13 @@ export default function Returns({
     onNavigate({ ...navigation, ...next })
   const refreshRefundData = async () => {
     if (!detail) return
-    const [f, o, e] = await Promise.allSettled([
-      window.adminOrders.financials(detail.orderId), window.adminOrders.get(detail.orderId), window.adminOrders.paymentEnvironment(),
+    const [f, o, e, c] = await Promise.allSettled([
+      window.adminOrders.financials(detail.orderId), window.adminOrders.get(detail.orderId), window.adminOrders.paymentEnvironment(), window.adminConnection?.status?.() ?? Promise.resolve(null),
     ])
-    if (f.status === 'fulfilled') setFinancials(f.value)
-    if (o.status === 'fulfilled') setOrderDetail(o.value)
-    if (e.status === 'fulfilled') setPaymentEnvironment(e.value)
+    setFinancials(f.status === 'fulfilled' ? f.value : null)
+    setOrderDetail(o.status === 'fulfilled' ? o.value : null)
+    setPaymentEnvironment(e.status === 'fulfilled' ? e.value : null)
+    setConnectionMode(c.status === 'fulfilled' ? c.value?.mode ?? null : null)
   }
   const completedReturn = detail?.submissions.some((s) => s.lines.some((line) => line.status === 'COMPLETED')) ?? false
   const payment = financials?.payment.state === 'ready' ? financials.payment.value : null
@@ -159,7 +160,7 @@ export default function Returns({
       <header>
         <div>
           <p className="returns-eyebrow">Customer care</p>
-          <h2 id="returns-title">
+          <h2 id="returns-title" tabIndex={-1}>
             Returns{detail?.reference ? ` · ${detail.reference}` : ''}
           </h2>
         </div>

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { AuthService } from './auth-service.js'
 import { readBackendError } from './backend-error.js'
-import { operations, type AdminOperationsApi, type InvestigationDecision, type Operation, type OperationSpec, type OperatorInput, type SafeValue, type SavedOperation } from './operations-contract.js'
+import { operations, type AdminOperationsApi, type InvestigationDecision, type Operation, type OperationSpec, type OperatorInput, type RefundStatusCheck, type SafeValue, type SavedOperation } from './operations-contract.js'
 /** Version 2 holds independent intents; a version 1 journal held one SavedOperation. */
 export type OperationJournal = { version: 2; intents: SavedOperation[] }
 export interface OperationStore { read(scope: string): unknown; write(scope: string, value: OperationJournal | SavedOperation | null): void }
@@ -50,8 +50,16 @@ const messages: Record<string,string> = {
   REVIEW_VERSION_CONFLICT: 'The review revision changed. Reload the review and evidence before deciding again.',
   REFUND_REVIEW_REQUIRED: 'Refund evidence requires review. Reconcile and investigate the retained evidence.',
   DISCREPANCY_STOCKTAKE_REASON_REQUIRED: 'An open stock discrepancy needs a physical count and a reason of at least 10 characters.',
+  REFUND_CAPACITY_EXCEEDED: 'Refund amount exceeds the remaining refundable balance.',
+  REFUND_UNRESOLVED: 'Another refund for this payment is pending or needs review. Review it before starting another refund.',
 }
 const MAX_INTENTS = 50
+function amountCents(value: unknown): bigint | null {
+  const text = typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : value
+  if (typeof text !== 'string' || !/^(0|[1-9]\d{0,9})\.\d{2}$/.test(text)) return null
+  const [whole, fraction] = text.split('.')
+  return BigInt(whole) * 100n + BigInt(fraction)
+}
 /** Sorted-key JSON; must match the Backend's canonical intent fingerprint. */
 export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
@@ -117,9 +125,69 @@ export class OperationsService implements AdminOperationsApi {
     const response = await this.auth.authenticatedFetch(path, { method, ...(method === 'GET' ? {} : { headers: { 'Content-Type':'application/json', 'Idempotency-Key':key! }, body: JSON.stringify(body) }), signal: AbortSignal.timeout(30000) })
     if (!response.ok) {
       const error = await readBackendError(response, 'Operator request failed. Refresh authoritative state.')
-      throw Object.assign(new Error(messages[error.code ?? ''] ?? error.message), { code:'api',backendCode:error.code,status:response.status,refundSubmissionDisposition:error.refundSubmissionDisposition })
+      const friendly = error.code === 'REFUND_CAPACITY_EXCEEDED' && error.availableRefundAmount
+        ? `The remaining refundable balance is £${error.availableRefundAmount}. Lower the amount and review again.`
+        : messages[error.code ?? ''] ?? error.message
+      throw Object.assign(new Error(friendly), { code:'api',backendCode:error.code,status:response.status,
+        refundSubmissionDisposition:error.refundSubmissionDisposition, refundRequestKey:error.refundRequestKey,
+        availableRefundAmount:error.availableRefundAmount, blockingRefundId:error.blockingRefundId, blockingRefundStatus:error.blockingRefundStatus })
     }
     return safeOperationResult(await response.json())
+  }
+  private async queryRefundStatus(input: OperatorInput, key: string): Promise<RefundStatusCheck> {
+    const path = `/orders/${input.orderId}/payments/${input.paymentId}/refund-request-status`
+    const response = await this.auth.authenticatedFetch(path, { method: 'GET', headers: { 'Idempotency-Key': key }, signal: AbortSignal.timeout(15000) })
+    if (!response.ok) {
+      const error = await readBackendError(response, 'Saved refund status could not be verified. Keep the request and try again later.')
+      throw Object.assign(new Error(error.message), { code: 'api', backendCode: error.code, status: response.status })
+    }
+    const body: unknown = await response.json()
+    if (!record(body)) return invalid('Saved refund status was not recognized. Keep the request; no refund was submitted by this check.')
+    if (body.state === 'NOT_SUBMITTED') {
+      if (body.requestKey !== key || ['refundId','status','resolutionCode','refund'].some(k => k in body)) return invalid('Saved refund status did not match the original request. Keep it for review.')
+      return { state: 'NOT_SUBMITTED' }
+    }
+    if (body.state !== 'RECORDED' || body.requestKey !== key || !record(body.refund)
+      || !Number.isSafeInteger(body.refund.refundId) || Number(body.refund.refundId) <= 0
+      || !['SUCCEEDED','FAILED','PROCESSING'].includes(String(body.refund.status))
+      || typeof body.refund.amount !== 'string' || body.refund.currency !== 'GBP' || body.refund.provider !== 'STRIPE') {
+      return invalid('Saved refund status did not match the original request. Keep it for review.')
+    }
+    const expectedCents = amountCents(input.amount), actualCents = amountCents(body.refund.amount)
+    if (expectedCents === null || actualCents !== expectedCents) return invalid('The recorded refund amount does not match this saved request. Keep it for review.')
+    return { state: 'RECORDED', refund: {
+      refundId: Number(body.refund.refundId), status: body.refund.status as 'SUCCEEDED' | 'FAILED' | 'PROCESSING',
+      amount: body.refund.amount, currency: 'GBP', provider: 'STRIPE',
+      ...(typeof body.refund.resolutionCode === 'string' ? { resolutionCode: body.refund.resolutionCode } : {}),
+      ...(typeof body.refund.reviewRequired === 'boolean' ? { reviewRequired: body.refund.reviewRequired } : {}),
+    } }
+  }
+  async checkRefundStatus(raw: OperatorInput, key: string): Promise<RefundStatusCheck> {
+    const input = validateOperationInput('refund', raw)
+    if (!/^[a-f0-9-]{36}$/.test(key)) return invalid('The saved refund request key is unreadable. Keep the request for review.')
+    return this.exclusive(async () => {
+      const scope = await this.scope(), intents = this.load(scope), slot = intentSlot('refund', input)
+      const saved = intents.find(i => intentSlot(i.operation, i.input) === slot)
+      if (!saved || saved.operation !== 'refund' || saved.key !== key || JSON.stringify(saved.input) !== JSON.stringify(input)) return invalid('The saved refund does not match the status check. No request was sent.')
+      const result = await this.queryRefundStatus(input, key)
+      if (result.state === 'RECORDED') this.save(scope, intents.map(i => i === saved ? { ...saved, state: 'confirmed' } : i))
+      return result
+    })
+  }
+  async finishUnsubmittedRefund(raw: OperatorInput, key: string): Promise<void> {
+    const input = validateOperationInput('refund', raw)
+    if (!/^[a-f0-9-]{36}$/.test(key)) return invalid('The saved refund request key is unreadable. Keep the request for review.')
+    return this.exclusive(async () => {
+      const scope = await this.scope(), intents = this.load(scope), slot = intentSlot('refund', input)
+      const saved = intents.find(i => intentSlot(i.operation, i.input) === slot)
+      if (!saved || saved.operation !== 'refund' || saved.key !== key || JSON.stringify(saved.input) !== JSON.stringify(input)) return invalid('The saved refund does not match the request being finished.')
+      const result = await this.queryRefundStatus(input, key)
+      if (result.state !== 'NOT_SUBMITTED') {
+        if (result.state === 'RECORDED') this.save(scope, intents.map(i => i === saved ? { ...saved, state: 'confirmed' } : i))
+        return invalid('The Backend found a refund for this saved request. It remains recorded; refresh its status instead of editing.')
+      }
+      this.save(scope, intents.filter(i => i !== saved))
+    })
   }
   async read(op: Operation, raw: OperatorInput) {
     if (operationSpec(op).method !== 'GET') return invalid()
@@ -149,8 +217,8 @@ export class OperationsService implements AdminOperationsApi {
         // A refund can be released for correction only when the Backend explicitly
         // says it did not create a refund or contact Stripe. An earlier uncertain
         // attempt stays retained even if a later response is contradictory.
-        if (op === 'refund' && previous?.state !== 'uncertain' && record(e)
-          && e.refundSubmissionDisposition === 'NOT_SUBMITTED' && e.backendCode !== 'IDEMPOTENCY_CONFLICT') {
+        if (op === 'refund' && record(e) && e.refundSubmissionDisposition === 'NOT_SUBMITTED'
+          && e.refundRequestKey === saved.key && e.backendCode !== 'IDEMPOTENCY_CONFLICT') {
           this.save(scope,others)
           throw e
         }

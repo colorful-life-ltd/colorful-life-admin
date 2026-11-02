@@ -2,6 +2,15 @@ import { financialHundredths } from '../electron/order-financials'
 import type { OrderDetail } from '../electron/order-contract'
 import type { ReturnCaseView } from '../electron/return-contract'
 
+/**
+ * Trust the explicit Admin connection-mode report; do not infer it from a URL.
+ * Direct mode remains valid for owner-approved environments. A known remote Sandbox
+ * paired with LIVE Stripe is contradictory and must fail closed.
+ */
+export function stripeEnvironmentMismatch(environment: 'TEST' | 'LIVE' | 'UNKNOWN', connectionMode: 'direct' | 'remote-sandbox' | null): boolean {
+  return connectionMode === 'remote-sandbox' && environment === 'LIVE'
+}
+
 export function refundInputCents(value: string): bigint | null {
   const match = /^(0|[1-9]\d{0,8})(?:\.(\d{1,2}))?$/.exec(value.trim())
   if (!match) return null
