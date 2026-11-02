@@ -227,8 +227,11 @@ export class OperationsService implements AdminOperationsApi {
         return result
       } catch (e) {
         if (op === 'refund' && e instanceof AuthError && e.code !== 'network') {
-          this.save(scope, others)
-          throw Object.assign(new Error('Admin authentication failed before refund processing. No refund was sent to Stripe; sign in again, then review and confirm the refund.'), { code: 'local-validation', requestSent: false })
+          this.save(scope, previous ? [...others, previous] : others)
+          const message = previous
+            ? `Admin authentication failed before this retry was sent. The earlier ${previous.state} refund record and its original request key are unchanged; its outcome has not been reclassified. Sign in again before continuing.`
+            : 'Admin authentication failed before refund processing. No refund was sent to Stripe; sign in again, then review and confirm the refund.'
+          throw Object.assign(new Error(message), { code: 'local-validation', requestSent: false })
         }
         // A pre-submission refusal describes this HTTP attempt only. Retain the
         // key until the Backend durably retires it under the same key lock used

@@ -163,9 +163,16 @@ export default function RefundModal({ detail, order, financials, environment, co
       if (replay && !parsed) setOutcomeText('The same saved request was checked, but no conclusive refund result was returned. It remains saved; do not create another refund.')
     } catch (failure) {
       const disposition = record(failure) ? failure.refundSubmissionDisposition : undefined
+      const localValidation = record(failure) && failure.code === 'local-validation'
       const message = failure instanceof Error ? failure.message : 'Refund request outcome could not be verified.'
       setError('')
-      if (disposition === 'NOT_SUBMITTED') {
+      if (localValidation) {
+        setPhase('outcome')
+        setReplaySaved(false); setSavedNotSubmitted(false); setSavedRetired(false)
+        setOutcomeText(message)
+        const intents = await adminOperations.pending().catch(() => [])
+        setSaved(intents.find(s => s.operation === 'refund' && Number(s.input.orderId) === detail.orderId) ?? saved)
+      } else if (disposition === 'NOT_SUBMITTED') {
         setPhase('outcome')
         setReplaySaved(false); setSavedNotSubmitted(false); setSavedRetired(false)
         setOutcomeText('The Backend rejected this attempt before Stripe. The original key remains saved; check its status and retire the key before correcting the amount.')

@@ -90,6 +90,15 @@ it('clears a saved refund after an authentication refusal before refund processi
   await expect(f.service.execute('refund',payload)).rejects.toThrow('Unable to reach service')
   expect(await f.service.pending()).toMatchObject([{state:'uncertain',input:payload}])
 })
+it.each(['uncertain','confirmed'] as const)('preserves a saved %s refund and its original key after an authentication failure on retry',async state=>{
+  const f=fixture(),payload={orderId:41,paymentId:7,amount:23.98,reason:'Return correction'},key='12345678-1234-1234-1234-123456789abc'
+  const saved={operation:'refund' as const,input:payload,key,state}
+  f.store.write('https://backend.test|2',{version:2,intents:[saved]})
+  f.authenticatedFetch.mockRejectedValueOnce(new AuthError('session-invalid','Session expired.','SESSION_INVALID',401))
+  await expect(f.service.execute('refund',payload)).rejects.toMatchObject({code:'local-validation',requestSent:false})
+  expect(await f.service.pending()).toEqual([saved])
+  expect(f.store.write).toHaveBeenLastCalledWith('https://backend.test|2',{version:2,intents:[saved]})
+})
 it('keeps an uncertain refund when NOT_SUBMITTED evidence is missing, contradictory or for another key',async()=>{
   for(const body of [
     {state:'NOT_SUBMITTED',requestKey:'different-key'},
