@@ -13,6 +13,9 @@ const maximizeWindowBridge = "maximize: () => forwardIpcResult(ipcRenderer.invok
 if (!preloadSource.includes("contextBridge.exposeInMainWorld('adminWindow'") || !builtPreloadSource.includes("exposeInMainWorld('adminWindow'") || !preloadSource.includes(maximizeWindowBridge) || !builtPreloadSource.includes("ipcRenderer.invoke('admin-window:maximize')") || !mainSource.includes("handleIpc('admin-window:maximize', (event) => {") || !mainSource.includes('event.sender === mainWindow.webContents') || !mainSource.includes('mainWindow.maximize()') || !builtMainSource.includes("handleIpc('admin-window:maximize'") || !builtMainSource.includes('mainWindow.maximize()')) {
   throw new Error('Authenticated workspace window maximize must use the native BrowserWindow maximize action through the typed Electron bridge.')
 }
+if (!mainSource.includes('...mainWindowOptions(),') || !mainSource.includes("window.once('ready-to-show', () => showMainWindow(window, process.platform))") || !builtMainSource.includes('mainWindowOptions()') || !builtMainSource.includes('showMainWindow(window, process.platform)') || /\b(kiosk|fullscreen|frame|titleBarStyle)\s*:/.test(mainSource)) {
+  throw new Error('The main window must start hidden with the reviewed framed options and be shown (maximized on Windows) once ready, never kiosk/fullscreen/frameless.')
+}
 
 if (!preloadSource.includes("contextBridge.exposeInMainWorld('adminAuth'")) {
   throw new Error('The preload must expose the typed adminAuth bridge.')
