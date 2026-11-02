@@ -426,7 +426,7 @@ it.each([
 ] as const)('gates saved refund replay for %s on %s connection',async(environment,mode,allowed)=>{
   const dialog=await openSavedRefund(environment,mode)
   fireEvent.click(within(dialog).getByRole('button',{name:'Check saved refund status'}))
-  expect(await within(dialog).findByText(/confirmed that no refund was created/)).toBeInTheDocument()
+  expect(await within(dialog).findByText(/No refund record is currently visible/)).toBeInTheDocument()
   const retry=within(dialog).getByRole('button',{name:'Review retry £23.99 GBP'})
   if(allowed){
     await waitFor(()=>expect(retry).toBeEnabled())
@@ -439,6 +439,38 @@ it.each([
     await waitFor(()=>expect(retry).toBeDisabled())
     expect(window.adminOperations.execute).not.toHaveBeenCalled()
   }
+})
+it('clears stale NOT_SUBMITTED presentation before a replay whose outcome becomes uncertain',async()=>{
+  const dialog=await openSavedRefund('TEST','direct')
+  fireEvent.click(within(dialog).getByRole('button',{name:'Check saved refund status'}))
+  await waitFor(()=>expect(within(dialog).getByRole('button',{name:'Review retry £23.99 GBP'})).toBeEnabled())
+  fireEvent.click(within(dialog).getByRole('button',{name:'Review retry £23.99 GBP'}))
+  vi.mocked(window.adminOperations.execute).mockRejectedValueOnce(new Error('network timeout'))
+  fireEvent.click(await within(dialog).findByRole('button',{name:'Retry saved refund £23.99 GBP'}))
+  expect(await within(dialog).findByRole('heading',{name:'Refund status needs checking'})).toBeInTheDocument()
+  expect(within(dialog).getByText(/could not verify whether this request reached Stripe/)).toBeInTheDocument()
+  expect(within(dialog).queryByText('No refund was submitted')).toBeNull()
+  expect(within(dialog).getByRole('button',{name:'Check saved refund status'})).toBeInTheDocument()
+})
+it('offers correction without replay after the exact saved key is durably retired',async()=>{
+  const saved=savedRefund(),dialog=await openSavedRefund('TEST','direct')
+  vi.mocked(window.adminOperations.checkRefundStatus).mockResolvedValueOnce({state:'RETIRED'})
+  fireEvent.click(within(dialog).getByRole('button',{name:'Check saved refund status'}))
+  expect(await within(dialog).findByRole('heading',{name:'Saved request key retired'})).toBeInTheDocument()
+  expect(within(dialog).queryByRole('button',{name:/Review retry/})).toBeNull()
+  fireEvent.click(within(dialog).getByRole('button',{name:'Correct saved amount'}))
+  await waitFor(()=>expect(window.adminOperations.finishUnsubmittedRefund).toHaveBeenCalledWith(saved.input,saved.key))
+  expect(await within(dialog).findByLabelText('Refund amount (GBP)')).toBeInTheDocument()
+})
+it('blocks refund review if refreshing the connection status fails',async()=>{
+  const dialog=await openRefund()
+  vi.mocked(window.adminConnection!.status).mockRejectedValueOnce(new Error('status unavailable'))
+  fireEvent.change(within(dialog).getByLabelText('Refund amount (GBP)'),{target:{value:'1.00'}})
+  fireEvent.change(within(dialog).getByLabelText('Reason'),{target:{value:'FAULTY'}})
+  fireEvent.click(within(dialog).getByRole('button',{name:'Continue'}))
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent(/Stripe environment, connection status and payment records/)
+  expect(within(dialog).queryByRole('button',{name:'Refund £1.00 GBP'})).toBeNull()
+  expect(window.adminOperations.execute).not.toHaveBeenCalled()
 })
 it('requires explicit LIVE confirmation before replaying a proven-unsubmitted saved refund',async()=>{
   const dialog=await openSavedRefund('LIVE','direct')
@@ -456,8 +488,8 @@ it('requires explicit LIVE confirmation before replaying a proven-unsubmitted sa
 it('releases an uncertain request only after a repeated exact-key proof, then permits a corrected amount',async()=>{
   const saved=savedRefund();const dialog=await openSavedRefund('TEST','direct')
   fireEvent.click(within(dialog).getByRole('button',{name:'Check saved refund status'}))
-  await waitFor(()=>expect(within(dialog).getByRole('button',{name:'Correct saved amount'})).toBeEnabled())
-  fireEvent.click(within(dialog).getByRole('button',{name:'Correct saved amount'}))
+  await waitFor(()=>expect(within(dialog).getByRole('button',{name:'Retire key and correct amount'})).toBeEnabled())
+  fireEvent.click(within(dialog).getByRole('button',{name:'Retire key and correct amount'}))
   await waitFor(()=>expect(window.adminOperations.finishUnsubmittedRefund).toHaveBeenCalledWith(saved.input,saved.key))
   const amount=within(dialog).getByLabelText('Refund amount (GBP)')
   fireEvent.change(amount,{target:{value:'23.98'}})

@@ -46,7 +46,7 @@ export type Operation = keyof typeof operations
 export type OperatorInput = Record<string, string | number | boolean | string[] | null>
 export type SafeValue = string | number | boolean | null | SafeValue[] | { [key: string]: SafeValue }
 export type SavedOperation = { operation: Operation; input: OperatorInput; key: string; state: 'uncertain' | 'confirmed' | 'rejected' }
-export type RefundStatusCheck = { state: 'NOT_SUBMITTED' } | { state: 'RECORDED'; refund: { refundId: number; status: 'SUCCEEDED' | 'FAILED' | 'PROCESSING'; amount: string; currency: 'GBP'; provider: 'STRIPE'; resolutionCode?: string; reviewRequired?: boolean } }
+export type RefundStatusCheck = { state: 'NOT_SUBMITTED' } | { state: 'RETIRED' } | { state: 'RECORDED'; refund: { refundId: number; status: 'SUCCEEDED' | 'FAILED' | 'PROCESSING'; amount: string; currency: 'GBP'; provider: 'STRIPE'; resolutionCode?: string; reviewRequired?: boolean } }
 export type InvestigationDecision = 'APPLIED' | 'NOT_APPLIED'
 export interface AdminOperationsApi {
   read(operation: Operation, input: OperatorInput): Promise<SafeValue>

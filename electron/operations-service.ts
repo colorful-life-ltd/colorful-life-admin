@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { AuthService } from './auth-service.js'
+import { AuthError } from './auth-service.js'
 import { readBackendError } from './backend-error.js'
 import { operations, type AdminOperationsApi, type InvestigationDecision, type Operation, type OperationSpec, type OperatorInput, type RefundStatusCheck, type SafeValue, type SavedOperation } from './operations-contract.js'
 /** Version 2 holds independent intents; a version 1 journal held one SavedOperation. */
@@ -143,6 +144,10 @@ export class OperationsService implements AdminOperationsApi {
     }
     const body: unknown = await response.json()
     if (!record(body)) return invalid('Saved refund status was not recognized. Keep the request; no refund was submitted by this check.')
+    if (body.state === 'RETIRED') {
+      if (body.requestKey !== key || ['refundId','status','resolutionCode','refund'].some(k => k in body)) return invalid('Saved refund retirement did not match the original request. Keep it for review.')
+      return { state: 'RETIRED' }
+    }
     if (body.state === 'NOT_SUBMITTED') {
       if (body.requestKey !== key || ['refundId','status','resolutionCode','refund'].some(k => k in body)) return invalid('Saved refund status did not match the original request. Keep it for review.')
       return { state: 'NOT_SUBMITTED' }
@@ -181,10 +186,17 @@ export class OperationsService implements AdminOperationsApi {
       const scope = await this.scope(), intents = this.load(scope), slot = intentSlot('refund', input)
       const saved = intents.find(i => intentSlot(i.operation, i.input) === slot)
       if (!saved || saved.operation !== 'refund' || saved.key !== key || JSON.stringify(saved.input) !== JSON.stringify(input)) return invalid('The saved refund does not match the request being finished.')
-      const result = await this.queryRefundStatus(input, key)
-      if (result.state !== 'NOT_SUBMITTED') {
-        if (result.state === 'RECORDED') this.save(scope, intents.map(i => i === saved ? { ...saved, state: 'confirmed' } : i))
-        return invalid('The Backend found a refund for this saved request. It remains recorded; refresh its status instead of editing.')
+      if (saved.state !== 'uncertain') return invalid('Only an uncertain refund request can be retired. Confirmed or rejected history is preserved.')
+      const path = `/orders/${input.orderId}/payments/${input.paymentId}/refund-request-retirement`
+      const response = await this.auth.authenticatedFetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key }, body: '{}', signal: AbortSignal.timeout(15000) })
+      if (!response.ok) {
+        const error = await readBackendError(response, 'The saved refund request could not be safely retired. Keep it and refresh its status.')
+        throw new Error(error.message)
+      }
+      const body: unknown = await response.json()
+      if (!record(body) || body.state !== 'RETIRED' || body.requestKey !== key
+        || ['refundId','status','resolutionCode','refund'].some(k => k in body)) {
+        return invalid('The Backend did not confirm retirement of this exact request key. Keep the saved request and refresh its status.')
       }
       this.save(scope, intents.filter(i => i !== saved))
     })
@@ -214,12 +226,16 @@ export class OperationsService implements AdminOperationsApi {
         this.save(scope,[...others,{...saved,state:'confirmed'}])
         return result
       } catch (e) {
-        // A refund can be released for correction only when the Backend explicitly
-        // says it did not create a refund or contact Stripe. An earlier uncertain
-        // attempt stays retained even if a later response is contradictory.
+        if (op === 'refund' && e instanceof AuthError && e.code !== 'network') {
+          this.save(scope, others)
+          throw Object.assign(new Error('Admin authentication failed before refund processing. No refund was sent to Stripe; sign in again, then review and confirm the refund.'), { code: 'local-validation', requestSent: false })
+        }
+        // A pre-submission refusal describes this HTTP attempt only. Retain the
+        // key until the Backend durably retires it under the same key lock used
+        // by refund creation; a delayed duplicate POST must not create a refund.
         if (op === 'refund' && record(e) && e.refundSubmissionDisposition === 'NOT_SUBMITTED'
           && e.refundRequestKey === saved.key && e.backendCode !== 'IDEMPOTENCY_CONFLICT') {
-          this.save(scope,others)
+          this.save(scope,[...others,{...saved,state:'uncertain'}])
           throw e
         }
         // A definitive 4xx refusal never applied; a later error cannot erase an earlier uncertain write.

@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest'
 import { OperationsService, validateOperationInput, safeOperationResult } from '../electron/operations-service'
+import { AuthError } from '../electron/auth-service'
 import { registerOperationsIpc } from '../electron/operations-ipc'
 import type { SavedOperation } from '../electron/operations-contract'
 import type { OperationJournal } from '../electron/operations-service'
@@ -52,7 +53,7 @@ it('releases an uncertain refund only after an exact-key NOT_SUBMITTED check and
   const original=(await f.service.pending())[0]
   expect(original).toMatchObject({operation:'refund',state:'uncertain',input:first})
   const proof=()=>new Response(JSON.stringify({state:'NOT_SUBMITTED',requestKey:original.key}))
-  f.authenticatedFetch.mockResolvedValueOnce(proof()).mockResolvedValueOnce(proof())
+  f.authenticatedFetch.mockResolvedValueOnce(proof()).mockResolvedValueOnce(new Response(JSON.stringify({state:'RETIRED',requestKey:original.key})))
   expect(await f.service.checkRefundStatus(first,original.key)).toEqual({state:'NOT_SUBMITTED'})
   await f.service.finishUnsubmittedRefund(first,original.key)
   expect(await f.service.pending()).toEqual([])
@@ -61,10 +62,33 @@ it('releases an uncertain refund only after an exact-key NOT_SUBMITTED check and
   const corrected=(await f.service.pending())[0]
   expect(corrected).toMatchObject({state:'confirmed',input:{...first,amount:23.98}})
   expect(corrected.key).not.toBe(original.key)
-  expect(f.authenticatedFetch.mock.calls.filter(call=>call[1]?.method==='GET')).toHaveLength(2)
+  expect(f.authenticatedFetch.mock.calls.filter(call=>call[1]?.method==='GET')).toHaveLength(1)
   expect(f.authenticatedFetch.mock.calls[1][1].headers['Idempotency-Key']).toBe(original.key)
+  expect(f.authenticatedFetch.mock.calls[2][0]).toBe('/orders/41/payments/7/refund-request-retirement')
   expect(f.authenticatedFetch.mock.calls[2][1].headers['Idempotency-Key']).toBe(original.key)
   expect(f.authenticatedFetch.mock.calls[3][1].headers['Idempotency-Key']).toBe(corrected.key)
+})
+it('does not retire or clear a confirmed refund journal through the unsubmitted path',async()=>{
+  const f=fixture(),saved={operation:'refund' as const,input:{orderId:41,paymentId:7,amount:23.98,reason:'Return correction'},key:'12345678-1234-1234-1234-123456789abc',state:'confirmed' as const}
+  f.store.write('https://backend.test|2',{version:2,intents:[saved]})
+  await expect(f.service.finishUnsubmittedRefund(saved.input,saved.key)).rejects.toThrow('Only an uncertain refund request can be retired')
+  expect(await f.service.pending()).toEqual([saved])
+  expect(f.authenticatedFetch).not.toHaveBeenCalled()
+})
+it('local refund validation refuses before creating an intent or sending a request',async()=>{
+  const f=fixture()
+  await expect(f.service.execute('refund',{orderId:41,paymentId:7,amount:0,reason:'Return correction'})).rejects.toThrow('No request was sent')
+  expect(await f.service.pending()).toEqual([])
+  expect(f.authenticatedFetch).not.toHaveBeenCalled()
+})
+it('clears a saved refund after an authentication refusal before refund processing, but not after network ambiguity',async()=>{
+  const f=fixture(),payload={orderId:41,paymentId:7,amount:23.98,reason:'Return correction'}
+  f.authenticatedFetch.mockRejectedValueOnce(new AuthError('session-invalid','Session expired.','SESSION_INVALID',401))
+  await expect(f.service.execute('refund',payload)).rejects.toThrow('No refund was sent to Stripe')
+  expect(await f.service.pending()).toEqual([])
+  f.authenticatedFetch.mockRejectedValueOnce(new AuthError('network','Unable to reach service.'))
+  await expect(f.service.execute('refund',payload)).rejects.toThrow('Unable to reach service')
+  expect(await f.service.pending()).toMatchObject([{state:'uncertain',input:payload}])
 })
 it('keeps an uncertain refund when NOT_SUBMITTED evidence is missing, contradictory or for another key',async()=>{
   for(const body of [
@@ -80,6 +104,15 @@ it('keeps an uncertain refund when NOT_SUBMITTED evidence is missing, contradict
     await expect(f.service.checkRefundStatus(payload,saved.key)).rejects.toThrow()
     await expect(f.service.finishUnsubmittedRefund(payload,saved.key)).rejects.toThrow()
     expect(await f.service.pending()).toMatchObject([{key:saved.key,state:'uncertain'}])
+  }
+})
+it('does not clear an uncertain journal when retirement evidence is missing or for another key',async()=>{
+  for(const body of [{state:'RETIRED',requestKey:'different-key'},{state:'NOT_SUBMITTED',requestKey:'12345678-1234-1234-1234-123456789abc'},{state:'RETIRED',requestKey:'12345678-1234-1234-1234-123456789abc',refundId:99}]){
+    const f=fixture(),payload={orderId:41,paymentId:7,amount:23.99,reason:'Return correction'},key='12345678-1234-1234-1234-123456789abc'
+    f.store.write('https://backend.test|2',{version:2,intents:[{operation:'refund',input:payload,key,state:'uncertain'}]})
+    f.authenticatedFetch.mockResolvedValueOnce(new Response(JSON.stringify(body)))
+    await expect(f.service.finishUnsubmittedRefund(payload,key)).rejects.toThrow('did not confirm retirement')
+    expect(await f.service.pending()).toMatchObject([{state:'uncertain',key}])
   }
 })
 it('requires ADMIN and strips private provider outcomes/keys from all returned data',async()=>{
