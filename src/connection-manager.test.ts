@@ -14,9 +14,12 @@ function fixture(overrides: Partial<ConnectionDependencies> = {}) {
   return { manager, deps, transport, emit: (s: string) => output(s), exit: () => exit() }
 }
 describe('owned SSM connection', () => {
-  it('defaults direct Admin development to the cloud Sandbox API and permits local-only overrides', () => {
-    expect(connectionConfig({}).backendUrl).toBe(SANDBOX_BACKEND_URL)
-    expect(connectionConfig({ COLORFUL_LIFE_BACKEND_URL: 'http://localhost:3000/api' }).backendUrl).toBe('http://localhost:3000/api')
+  it('defaults Admin development to the full Sandbox API through the owned SSM tunnel', () => {
+    expect(connectionConfig({})).toMatchObject({ mode: 'remote-sandbox', backendUrl: 'http://localhost:3000', remotePort: 3001, instance: 'i-02b28336518077a8f' })
+  })
+  it('keeps explicit direct mode on the public Sandbox API and permits local-only overrides', () => {
+    expect(connectionConfig({ COLORFUL_LIFE_CONNECTION_MODE: 'direct' })).toMatchObject({ mode: 'direct', backendUrl: SANDBOX_BACKEND_URL })
+    expect(connectionConfig({ COLORFUL_LIFE_BACKEND_URL: 'http://localhost:3000/api' })).toMatchObject({ mode: 'direct', backendUrl: 'http://localhost:3000/api' })
     expect(() => connectionConfig({ COLORFUL_LIFE_BACKEND_URL: 'https://production.example.com/api' })).toThrow(/configuration/)
   })
   it('starts once with explicit profile and safe argument array, and only connects after readiness', async () => {
