@@ -88,11 +88,32 @@ describe('App authentication flow', () => {
     expect(window.adminAuth.login).not.toHaveBeenCalled()
   })
 
+  it('renders Sign in as the primary button, Forgot password as a text link and Register Administrator as an outlined button', async () => {
+    window.adminAuth.bootstrapStatus = vi.fn().mockResolvedValue({ registrationAvailable: true })
+    render(<App />)
+    const register = await screen.findByRole('button', { name: 'Register Administrator' })
+    const signIn = screen.getByRole('button', { name: 'Sign in' })
+    const forgot = screen.getByRole('button', { name: 'Forgot password?' })
+    expect(signIn).toHaveClass('button', 'button-primary')
+    expect(forgot).toHaveClass('text-link')
+    expect(forgot).not.toHaveClass('button')
+    expect(register).toHaveClass('button', 'button-outline')
+    expect(screen.getByRole('separator')).toBeInTheDocument()
+    // Visual order: Sign in, then Forgot password, then the separated registration action.
+    expect(signIn.compareDocumentPosition(forgot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(forgot.compareDocumentPosition(register) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(register)
+    expect(screen.getByRole('button', { name: 'Back to sign in' })).toHaveClass('text-link')
+    expect(screen.queryByRole('separator')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Forgot password?' })).not.toBeInTheDocument()
+  })
+
   it('does not offer registration when setup is closed or the Backend cannot report its state', async () => {
     window.adminAuth.bootstrapStatus = vi.fn().mockResolvedValue({ registrationAvailable: false })
     const { unmount } = render(<App />)
     await waitFor(() => expect(window.adminAuth.bootstrapStatus).toHaveBeenCalled())
     expect(screen.queryByRole('button', { name: 'Register Administrator' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('separator')).not.toBeInTheDocument()
     unmount()
     window.adminAuth.bootstrapStatus = vi.fn().mockRejectedValue(new Error('offline'))
     render(<App />)

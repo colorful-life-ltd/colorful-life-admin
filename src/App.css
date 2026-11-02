@@ -24,6 +24,15 @@ input:focus { border-color: var(--focus); box-shadow: 0 0 0 3px rgba(211, 139, 6
 .button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; } .button:disabled { cursor: not-allowed; opacity: .65; } .button[aria-busy="true"] { cursor: progress; }
 .button-primary { margin-top: 17px; color: white; background: var(--accent); } .button-primary:hover:not(:disabled) { background: var(--accent-strong); }
 .error-message { margin: 10px 0 0; color: var(--danger); font-size: 13px; } .status-message { color: var(--text-muted); }
+/* Login card actions: one shared size for primary and outlined buttons, text links for secondary actions. */
+.login-card .button { display: flex; align-items: center; justify-content: center; width: 100%; height: 46px; min-height: 46px; padding: 0 17px; font-size: 14px; line-height: 1; transition: background-color .15s ease, border-color .15s ease, color .15s ease; }
+.button-outline { color: var(--accent); background: transparent; border: 1.5px solid var(--accent); } .button-outline:hover:not(:disabled) { color: var(--accent-strong); background: rgba(40, 107, 93, .07); border-color: var(--accent-strong); }
+.auth-links { display: flex; justify-content: flex-end; margin-top: 12px; } .auth-links-start { justify-content: flex-start; } .auth-links:empty { display: none; }
+.text-link { padding: 2px 0; color: var(--accent); background: transparent; border: 0; border-radius: 4px; font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; text-underline-offset: 3px; }
+.text-link:hover:not(:disabled) { color: var(--accent-strong); text-decoration: underline; } .text-link:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; } .text-link:disabled { color: var(--text-muted); cursor: not-allowed; opacity: .65; }
+.auth-separator { height: 1px; margin: 26px 0 18px; background: var(--border); border: 0; }
+.auth-setup-note { margin: 0 0 10px; color: var(--text-muted); font-size: 12px; font-weight: 650; letter-spacing: .02em; }
+.login-card .auth-status { margin: 14px 0 0; font-size: 13px; }
 .shell { width: 100%; height: 100%; padding: 36px clamp(24px, 6vw, 80px); }
 .shell-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .shell-header h1 { margin: 0; color: #26342f; font-size: 25px; letter-spacing: -.04em; } .button-secondary { color: #415049; background: var(--surface-muted); }

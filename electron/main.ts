@@ -13,6 +13,7 @@ import { safeTrackingUrl } from './tracking-url.js'
 import { OrderService } from './order-service.js'
 import { registerOrderIpc } from './order-ipc.js'
 import { shell, app, BrowserWindow, ipcMain, Menu, type IpcMainInvokeEvent } from 'electron'
+import { mainWindowOptions, showMainWindow } from './main-window.js'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { AuthError, AuthService } from './auth-service.js'
@@ -214,6 +215,7 @@ handleIpc('admin-purchases:create-listing', (_event, id: unknown, input: unknown
 
 const createWindow = (): void => {
   const window = new BrowserWindow({
+    ...mainWindowOptions(),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -229,6 +231,7 @@ const createWindow = (): void => {
     return { action: 'deny' }
   })
   mainWindow = window
+  window.once('ready-to-show', () => showMainWindow(window, process.platform))
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = null
   })

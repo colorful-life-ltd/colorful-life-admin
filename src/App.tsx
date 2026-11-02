@@ -322,10 +322,16 @@ function App() {
             {recoveryMessage && <p className="status-message" role="status">{recoveryMessage}</p>}
             <button className="button button-primary" type="submit" disabled={isSubmitting || !connectionReady} aria-busy={isSubmitting}>{isSubmitting ? (registrationOpen ? 'Registering…' : 'Signing in…') : (registrationOpen ? 'Register Administrator' : 'Sign in')}</button>
           </form>
-          {!registrationOpen && <button className="button button-secondary" type="button" onClick={() => void handlePasswordRecovery()} disabled={!connectionReady}>Forgot password?</button>}
-          {!registrationOpen && bootstrapAvailable && <button className="button button-secondary" type="button" onClick={() => { setError(''); setRegistrationOpen(true) }}>Register Administrator</button>}
-          {bootstrapError && <p className="status-message" role="status">{bootstrapError}</p>}
-          {registrationOpen && <button className="button button-secondary" type="button" onClick={() => { setRegistrationOpen(false); setPassword(''); setConfirmPassword(''); setError('') }}>Back to sign in</button>}
+          <div className={`auth-links${registrationOpen ? ' auth-links-start' : ''}`}>
+            {!registrationOpen && <button className="text-link" type="button" onClick={() => void handlePasswordRecovery()} disabled={!connectionReady}>Forgot password?</button>}
+            {registrationOpen && <button className="text-link" type="button" onClick={() => { setRegistrationOpen(false); setPassword(''); setConfirmPassword(''); setError('') }}>Back to sign in</button>}
+          </div>
+          {!registrationOpen && bootstrapAvailable && <>
+            <hr className="auth-separator" />
+            <p className="auth-setup-note">First-time setup</p>
+            <button className="button button-outline" type="button" onClick={() => { setError(''); setRegistrationOpen(true) }}>Register Administrator</button>
+          </>}
+          {bootstrapError && <p className="status-message auth-status" role="status">{bootstrapError}</p>}
         </section>
       </div>
     </main>
