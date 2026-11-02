@@ -5,7 +5,8 @@
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "concurrently --kill-others --names renderer,electron-build,electron \"npm:dev:renderer\" \"npm:dev:electron:compile\" \"npm:dev:electron:launch\"",
+    "dev": "run-s build:electron dev:start",
+    "dev:start": "concurrently --kill-others --names renderer,electron-build,electron \"npm:dev:renderer\" \"npm:dev:electron:compile\" \"npm:dev:electron:launch\"",
     "dev:renderer": "vite --host 127.0.0.1",
     "dev:electron:compile": "run-s build:electron:assets dev:electron:watch",
     "dev:electron:watch": "tsc -p tsconfig.electron.json --watch",

@@ -25,7 +25,7 @@ import type { ManualPurchaseInput } from './purchase-contract.js'
 import { handleEditContextMenu } from './edit-context-menu.js'
 import { guardRendererNavigation, secureIpcHandler, trustedRendererUrl } from './renderer-security.js'
 import { connectionConfig } from './connection-config.js'
-import { ConnectionManager, connectionFetcher } from './connection-manager.js'
+import { ConnectionManager, connectionFetcher, diagnosticFetcher } from './connection-manager.js'
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url))
 const rendererUrl = trustedRendererUrl(join(app.getAppPath(), 'dist', 'index.html'), process.env.ELECTRON_RENDERER_URL, app.isPackaged)
@@ -35,7 +35,7 @@ const connection = new ConnectionManager(connectionSettings)
 const ownsInstance = app.requestSingleInstanceLock()
 if (!ownsInstance) app.quit()
 let mainWindow: BrowserWindow | null = null
-const authService = new AuthService(backendUrl, connectionFetcher(connection, (input, init) => fetch(input, { ...init, redirect: 'error' })), (notice) => {
+const authService = new AuthService(backendUrl, connectionFetcher(connection, diagnosticFetcher((input, init) => fetch(input, { ...init, redirect: 'error' }))), (notice) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('admin-auth:session-ended', notice)
 }, (accessTokenExpiresAt) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('admin-auth:session-renewed', accessTokenExpiresAt)

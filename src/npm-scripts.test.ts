@@ -40,6 +40,14 @@ it('rebuilds renderer and main process before launching the Sandbox Admin, so st
   expect(scripts['electron:sandbox:launch']).toBe('cross-env COLORFUL_LIFE_CONNECTION_MODE=remote-sandbox electron .')
 })
 
+it('compiles the main process before the development launch, so a stale dist-electron cannot run', () => {
+  // wait-on only checks that dist-electron/main.js exists; after a pull it still holds the previous build.
+  const order = steps('dev')
+  expect(order).toEqual(['build:electron:tsc', 'build:electron:assets', 'dev:start'])
+  expect(scripts['dev:start']).toContain('npm:dev:electron:launch')
+  expect(steps('dev:electron:launch')).toEqual(['dev:electron:wait', 'dev:electron:run'])
+})
+
 it('builds before packaging', () => {
   expect(steps('package').at(-1)).toBe('package:create')
   expect(steps('package')).toContain('build:electron:assets')
