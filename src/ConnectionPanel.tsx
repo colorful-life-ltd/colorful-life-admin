@@ -15,11 +15,17 @@ export default function ConnectionPanel({ onReady }: { onReady: (ready: boolean)
     void poll(); const timer = setInterval(() => { void poll() }, 1000)
     return () => { active = false; clearInterval(timer) }
   }, [onReady])
-  if (!window.adminConnection || status?.mode === 'direct') return null
+  if (!window.adminConnection) return null
+  // Direct mode is shown too, so an unexpected mode or target is never silent.
+  if (status?.mode === 'direct') return <aside className="connection-panel connection-panel-direct" aria-label="Backend connection">
+    <p role="status">Direct connection (no SSM tunnel)</p>
+    {status.description && <p className="connection-detail">{status.description}</p>}
+  </aside>
   const state = status?.state ?? 'connecting'
   return <aside className="connection-panel" aria-label="Backend connection">
     <p role="status">{state === 'connected' ? 'Connected' : state === 'failed' ? 'Connection Failed' : 'Connecting'}</p>
     {status?.message && <p>{status.message}</p>}
+    {status?.description && <p className="connection-detail">{status.description}</p>}
     {state === 'failed' && <button className="button button-secondary" type="button" onClick={() => {
       setStatus({ mode: 'remote-sandbox', state: 'connecting', message: 'Connecting securely to the Backend…' }); onReady(false)
       void adminConnection.retry().then(next => { setStatus(next); onReady(next.state === 'connected') }, () => setStatus({ mode: 'remote-sandbox', state: 'failed', message: 'Connection retry failed. Restart Admin.' }))

@@ -1,7 +1,10 @@
 import { validateBackendUrl } from './backend-url.js'
 export const SANDBOX_BACKEND_URL = 'https://build-and-bloom.co.uk/api'
+export type ConnectionModeSource = 'COLORFUL_LIFE_CONNECTION_MODE' | 'COLORFUL_LIFE_BACKEND_URL' | 'default'
 export type ConnectionConfig = {
   mode: 'direct' | 'remote-sandbox'; backendUrl: string; profile: string; region: string;
+  /** Which setting chose the mode, for diagnostics (never a value). */
+  modeSource: ConnectionModeSource;
   instance: string; localPort: number; remotePort: number; awsPath?: string; pluginPath?: string;
 }
 export function connectionConfig(env: NodeJS.ProcessEnv): ConnectionConfig {
@@ -32,5 +35,14 @@ export function connectionConfig(env: NodeJS.ProcessEnv): ConnectionConfig {
     const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && url.protocol === 'http:'
     if (!local && backendUrl !== SANDBOX_BACKEND_URL) throw invalid()
   }
-  return { mode, backendUrl, profile, region, instance, localPort, remotePort: port(env.COLORFUL_LIFE_SSM_REMOTE_PORT, 3001), awsPath: env.COLORFUL_LIFE_AWS_CLI_PATH, pluginPath: env.COLORFUL_LIFE_SSM_PLUGIN_PATH }
+  const modeSource: ConnectionModeSource = env.COLORFUL_LIFE_CONNECTION_MODE !== undefined ? 'COLORFUL_LIFE_CONNECTION_MODE' : env.COLORFUL_LIFE_BACKEND_URL ? 'COLORFUL_LIFE_BACKEND_URL' : 'default'
+  return { mode, modeSource, backendUrl, profile, region, instance, localPort, remotePort: port(env.COLORFUL_LIFE_SSM_REMOTE_PORT, 3001), awsPath: env.COLORFUL_LIFE_AWS_CLI_PATH, pluginPath: env.COLORFUL_LIFE_SSM_PLUGIN_PATH }
+}
+
+/** Credential-free one-line description of the effective connection, safe to log and display. */
+export function describeConnection(config: ConnectionConfig): string {
+  const target = config.mode === 'remote-sandbox'
+    ? `${config.backendUrl} -> SSM ${config.instance}:${config.remotePort} (profile ${config.profile}, ${config.region})`
+    : config.backendUrl
+  return `mode=${config.mode} target=${target} chosen by ${config.modeSource === 'default' ? 'default (no override)' : config.modeSource}`
 }

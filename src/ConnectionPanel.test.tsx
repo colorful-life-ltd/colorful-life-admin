@@ -12,9 +12,13 @@ it('shows connecting/failed status and an explicit retry without account authori
   await screen.findByText('Connected'); expect(ready).toHaveBeenCalledWith(true)
   expect(window.adminConnection.retry).toHaveBeenCalledTimes(1)
 })
-it('keeps direct development mode free of an SSM banner', async () => {
+it('shows direct mode and its target without SSM status or retry, so an unexpected mode is never silent', async () => {
   const ready=vi.fn()
-  window.adminConnection = { status: vi.fn().mockResolvedValue({mode:'direct',state:'connected',message:'Direct connection configured.'}),retry:vi.fn() }
+  const description='mode=direct target=https://build-and-bloom.co.uk/api chosen by COLORFUL_LIFE_BACKEND_URL'
+  window.adminConnection = { status: vi.fn().mockResolvedValue({mode:'direct',state:'connected',message:'Direct connection configured.',description}),retry:vi.fn() }
   render(<ConnectionPanel onReady={ready} />)
-  await waitFor(()=>expect(ready).toHaveBeenCalledWith(true));expect(screen.queryByLabelText('Backend connection')).not.toBeInTheDocument()
+  await waitFor(()=>expect(ready).toHaveBeenCalledWith(true))
+  expect(await screen.findByText(description)).toBeInTheDocument()
+  expect(screen.getByRole('status')).toHaveTextContent('Direct connection (no SSM tunnel)')
+  expect(screen.queryByRole('button',{name:'Retry Connection'})).not.toBeInTheDocument()
 })

@@ -1,7 +1,7 @@
 import { createServer } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
 import { AuthError, type Fetcher } from './auth-service.js'
-import type { ConnectionConfig } from './connection-config.js'
+import { describeConnection, type ConnectionConfig } from './connection-config.js'
 import type { ConnectionStatus } from './connection-contract.js'
 import { discoverTools, spawnOwnedTunnel, type OwnedTunnel } from './ssm-process.js'
 
@@ -39,8 +39,10 @@ export type ConnectionDependencies = {
   spawn: typeof spawnOwnedTunnel; healthy: typeof healthy;
   pause: (ms: number, signal: AbortSignal) => Promise<unknown>; now: () => number;
   startupMs: number; monitorMs: number;
+  /** Credential-free diagnostics sink (mode, target, state and reason only). */
+  log: (line: string) => void;
 }
-const defaults: ConnectionDependencies = { discover: discoverTools, portFree, spawn: spawnOwnedTunnel, healthy, pause: (ms, signal) => delay(ms, undefined, { signal }), now: Date.now, startupMs: 60000, monitorMs: 5000 }
+const defaults: ConnectionDependencies = { discover: discoverTools, portFree, spawn: spawnOwnedTunnel, healthy, pause: (ms, signal) => delay(ms, undefined, { signal }), now: Date.now, startupMs: 60000, monitorMs: 5000, log: (line) => console.info(line) }
 export class ConnectionManager {
   private view: ConnectionStatus
   private attempt?: Promise<void>
@@ -56,9 +58,13 @@ export class ConnectionManager {
     this.config = config
     this.deps = { ...defaults, ...dependencies }
     this.view = { mode: config.mode, state: config.mode === 'direct' ? 'connected' : 'connecting', message: config.mode === 'direct' ? 'Direct Backend connection configured.' : 'Connecting securely to the Backend…' }
+    this.deps.log(`[Admin connection] ${describeConnection(config)}`)
   }
-  status(): ConnectionStatus { return { ...this.view } }
-  private fail(message: string) { this.view = { mode: this.config.mode, state: 'failed', message } }
+  status(): ConnectionStatus { return { ...this.view, description: describeConnection(this.config) } }
+  private fail(message: string) {
+    if (this.view.state !== 'failed' || this.view.message !== message) this.deps.log(`[Admin connection] failed: ${message}`)
+    this.view = { mode: this.config.mode, state: 'failed', message }
+  }
   private clearMonitor() { if (this.monitor) clearTimeout(this.monitor); this.monitor = undefined }
   private async cleanup() {
     this.clearMonitor()
@@ -110,6 +116,7 @@ export class ConnectionManager {
         check()
         if (opened && !exited && await this.deps.healthy(this.config.backendUrl, controller.signal)) {
           check(); this.view = { mode: this.config.mode, state: 'connected', message: 'Secure Backend connection is ready.' }
+          this.deps.log(`[Admin connection] connected: tunnel port ${this.config.localPort} open and Backend /health and /ready OK`)
           output = ''; this.scheduleMonitor(controller); return
         }
         await this.deps.pause(250, controller.signal)
@@ -165,6 +172,26 @@ export class ConnectionManager {
     await this.cleanup()
   }
 }
+/** One credential-free line per Backend response: method, path without query, status and content type.
+ *  An HTML 404 means the request never reached the Backend (for example the public Nginx catch-all). */
+export function apiResponseLine(method: string | undefined, url: string, status: number, contentType: string | null): string {
+  const path = URL.canParse(url) ? `${new URL(url).origin}${new URL(url).pathname}` : url.split('?')[0]
+  return `[Admin API] ${(method ?? 'GET').toUpperCase()} ${path} -> ${status} ${(contentType ?? 'no content-type').split(';')[0]}`
+}
+
+export function diagnosticFetcher(fetcher: Fetcher, log: (line: string) => void = (line) => console.info(line)): Fetcher {
+  return async (input, init) => {
+    let response: Response
+    try { response = await fetcher(input, init) }
+    catch (error) {
+      log(`${apiResponseLine(init?.method, String(input), 0, null).replace(/ -> 0 no content-type$/, '')} -> request failed (${error instanceof Error ? error.name : 'error'})`)
+      throw error
+    }
+    log(apiResponseLine(init?.method, String(input), response.status, response.headers.get('content-type')))
+    return response
+  }
+}
+
 export function connectionFetcher(manager: Pick<ConnectionManager, 'ensureReady'>, fetcher: Fetcher): Fetcher {
   return async (input, init) => {
     try { await manager.ensureReady() } catch { throw new AuthError('network', 'Backend connection is unavailable. Use Retry Connection, then try again.') }
