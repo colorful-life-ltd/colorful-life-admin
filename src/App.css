@@ -178,4 +178,5 @@ input:focus { border-color: var(--focus); box-shadow: 0 0 0 3px rgba(211, 139, 6
 
 .connection-panel { position: relative; grid-column: 1 / -1; padding: .75rem 1rem; margin: .75rem; border: 1px solid #b9c8ba; border-radius: .5rem; background: #f6faf6; color: #173c2b; }
 .connection-panel p { margin: .25rem 0; }
-.connection-panel .connection-detail { color: #4c5f55; font-size: 12px; overflow-wrap: anywhere; } .connection-panel-direct { border-color: #e2c79a; background: #fdf8ee; color: #5b4222; }
+.connection-panel-compact { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: .5rem .875rem; font-size: 13px; }
+.connection-panel-failed { border-color: #e3b9b9; background: #fdf3f3; color: #7a2e2e; } .connection-panel-compact .button { flex: 0 0 auto; min-height: 34px; margin: 0; padding: 0 14px; font-size: 12px; }
