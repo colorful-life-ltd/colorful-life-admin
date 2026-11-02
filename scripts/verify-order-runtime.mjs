@@ -40,7 +40,7 @@ async function run() {
     let data
     if(req.url.startsWith('/admin/returns?')) data={page:1,pageSize:25,total:1,cases:[{orderId:41,reference:'BB-R-41',createdAt:timestamp,customer:{email:'buyer@test.invalid',firstName:'Sam',lastName:'Buyer',deletedAt:null},statuses:[returnView.submissions[0].lines[0].status]}]}
     else if(req.url==='/admin/returns/41')data=returnView
-    else if(req.url==='/admin/returns/41/lines/10/authorize') {assert.equal(body.shippingPayer,'SELLER');assert.equal(body.rightsReviewed,true);Object.assign(returnView.submissions[0].lines[0],{status:'AUTHORIZED',authorizedAt:timestamp,shippingPayer:body.shippingPayer,instructions:{reference:'BB-R-41',address:returnView.defaultInstructions.address,instructions:body.instructions,postageInstructions:body.postageInstructions,shippingPayer:body.shippingPayer}});data=returnView}
+    else if(req.url==='/admin/returns/41/lines/10/authorize') {assert.equal(body.shippingPayer,'SELLER');assert.equal(body.rightsReviewed,true);assert.match(body.postageInstructions,/^Please return the item using a tracked delivery service.*reimburse reasonable return postage costs/);Object.assign(returnView.submissions[0].lines[0],{status:'AUTHORIZED',authorizedAt:timestamp,shippingPayer:body.shippingPayer,instructions:{reference:'BB-R-41',address:returnView.defaultInstructions.address,instructions:body.instructions,postageInstructions:body.postageInstructions,shippingPayer:body.shippingPayer}});data=returnView}
     else if(req.url==='/admin/returns/41/lines/10/receive') {assert.equal(typeof body.note,'string');Object.assign(returnView.submissions[0].lines[0],{status:'RECEIVED',receivedAt:body.receivedAt,receiptNote:body.note,receivedByUserId:1});data=returnView}
     else if (req.url === '/auth/login') data = { token: 'order-runtime-token', accessTokenExpiresAt: new Date(Date.now() + 3600000).toISOString(), refreshToken: 'order-runtime-refresh', refreshExpiresAt: new Date(Date.now() + 86400000).toISOString() }
     else if (req.url === '/orders/41/payments') data = [{ id: 7, orderId: 41, amount: '25', currency: 'GBP', provider: 'STRIPE', status: 'SUCCEEDED', paidAt: timestamp, refundedAmount: financialMode === 'full' ? '25' : '0', reservedRefundAmount: '0', providerReference: 'DO_NOT_EXPOSE', idempotencyKey: 'DO_NOT_EXPOSE' }]
@@ -193,7 +193,8 @@ async function run() {
     await click('Authorize')
     await until("document.querySelector('dialog')?.matches(':modal')")
     assert.equal(await js("document.querySelector('dialog').textContent.includes('3 Hawthorne Drive')"),true)
-    await js("(()=>{const input=document.querySelector('dialog textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'Contact support to arrange a prepaid return label.');input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('dialog input[type=checkbox]').click()})()")
+    assert.equal(await js("[...document.querySelectorAll('dialog input[type=radio]')].some(r=>r.checked)"),false)
+    await js("(()=>{document.querySelector('dialog input[type=radio][value=SELLER]').click();document.querySelector('dialog input[type=checkbox]').click()})()")
     writeFileSync(join(folder,'returns-authorisation-preview.png'),(await window.webContents.capturePage()).toPNG())
     await click('Confirm authorize')
     await click('Confirm Received')
