@@ -14,9 +14,9 @@ function Result({ value }: { value: SafeValue }) {
   if (typeof value === 'object') return <dl>{Object.entries(value).map(([k,v]) => <div key={k}><dt>{label(k)}</dt><dd><Result value={v} /></dd></div>)}</dl>
   return <span>{typeof value === 'boolean' ? value ? 'Yes' : 'No' : String(value)}</span>
 }
-export default function Operations({ sessionBlocked = false, orderId, listingId, onViewReturns }: { sessionBlocked?: boolean; orderId?: number; listingId?: number; onViewReturns?:(orderId:number)=>void }) {
-  const [op,setOp] = useState<Operation>(orderId ? 'audit' : listingId ? 'inventory' : 'audit')
-  const [values,setValues] = useState<Record<string,string>>({orderId:String(orderId ?? ''),productListingId:String(listingId ?? ''),page:'1',afterId:'0'})
+export default function Operations({ sessionBlocked = false, orderId, listingId, onViewReturns, onlyOperation, initialOperation, initialValues, onActionComplete }: { sessionBlocked?: boolean; orderId?: number; listingId?: number; onViewReturns?:(orderId:number)=>void; onlyOperation?: Operation; initialOperation?: Operation; initialValues?: Record<string,string>; onActionComplete?: () => void | Promise<void> }) {
+  const [op,setOp] = useState<Operation>(initialOperation ?? onlyOperation ?? (orderId ? 'audit' : listingId ? 'inventory' : 'audit'))
+  const [values,setValues] = useState<Record<string,string>>({...{orderId:String(orderId ?? ''),productListingId:String(listingId ?? ''),page:'1',afterId:'0'}, ...initialValues})
   const [saved,setSaved] = useState<SavedOperation[]>([]), [result,setResult] = useState<SafeValue|null>(null)
   const [investigating,setInvestigating] = useState<SavedOperation|null>(null), [decision,setDecision] = useState<InvestigationDecision|''>(''), [note,setNote] = useState('')
   const [error,setError] = useState(''), [busy,setBusy] = useState(false), [confirm,setConfirm] = useState(false)
@@ -39,7 +39,7 @@ export default function Operations({ sessionBlocked = false, orderId, listingId,
   }
   function restore(s: SavedOperation) { if((operations[s.operation] as OperationSpec).retired){setError('Use the Returns workspace; the saved legacy intent remains available for investigation.');return} setOp(s.operation); setValues(Object.fromEntries(Object.entries(s.input).map(([k,v]) => [k,Array.isArray(v) ? v.join('\n') : v === null ? '' : String(v)]))); setConfirm(false); setError('') }
   const run = async () => {
-    if (lock.current || sessionBlocked) return
+    if (lock.current || sessionBlocked || (spec.method !== 'GET' && !confirm)) return
     const input: OperatorInput = {}
     for (const f of spec.fields) {
       const v = values[f.name] ?? choices(f)[0] ?? ''
@@ -53,6 +53,7 @@ export default function Operations({ sessionBlocked = false, orderId, listingId,
       const response = spec.method === 'GET' ? await adminOperations.read(op,input) : await adminOperations.execute(op,input)
       if (current !== generation.current) return
       setResult(response); setConfirm(false)
+      if (spec.method !== 'GET') await onActionComplete?.()
       if (spec.method !== 'GET' && typeof input.orderId === 'number') {
         try {
           const [audit,eligibility,order] = await Promise.all(['audit','eligibility','order'].map(read => adminOperations.read(read as Operation,{orderId:input.orderId!})))
@@ -83,7 +84,7 @@ export default function Operations({ sessionBlocked = false, orderId, listingId,
       <label>Investigation evidence (at least 10 characters)<textarea required value={note} onChange={e => setNote(e.target.value)} /></label>
       <button type="submit" disabled={!decision || note.trim().length < 10}>Record outcome and clear intent</button><button type="button" onClick={() => setInvestigating(null)}>Cancel</button>
     </fieldset></form>}
-    <label>Workflow<select disabled={busy} value={op} onChange={e => {setOp(e.target.value as Operation);setConfirm(false);setResult(null);setError('')}}>{(['Orders','Inventory','Products','Reviews'] as const).map(group => <optgroup key={group} label={group}>{(Object.entries(operations) as [Operation,OperationSpec][]).filter(([,s])=>s.group===group&&!s.retired).map(([key,s]) => <option key={key} value={key}>{s.label}</option>)}</optgroup>)}</select></label>
+    {!onlyOperation && <label>Workflow<select disabled={busy} value={op} onChange={e => {setOp(e.target.value as Operation);setConfirm(false);setResult(null);setError('')}}>{(['Orders','Inventory','Products','Reviews'] as const).map(group => <optgroup key={group} label={group}>{(Object.entries(operations) as [Operation,OperationSpec][]).filter(([,s])=>s.group===group&&!s.retired).map(([key,s]) => <option key={key} value={key}>{s.label}</option>)}</optgroup>)}</select></label>}
     {spec.help && <p>{spec.help}</p>}
     <form onSubmit={e => {e.preventDefault();void run()}}><fieldset disabled={busy || sessionBlocked}>
       {spec.fields.map(f => <label key={f.name}>{f.label}{f.options || f.type === 'boolean' ? <select required={!f.optional && (f.choose || f.type === 'boolean')} value={values[f.name] ?? choices(f)[0]} onChange={e=>{setValues(v=>({...v,[f.name]:e.target.value}));setConfirm(false)}}>{choices(f).map(v=><option key={v} value={v}>{choiceLabel(f,v)}</option>)}</select> : f.type === 'references' ? <textarea required value={values[f.name] ?? ''} onChange={e=>{setValues(v=>({...v,[f.name]:e.target.value}));setConfirm(false)}} /> : <input required={!f.optional} type={['id','integer','money'].includes(f.type) ? 'number' : 'text'} min={f.type==='integer' ? 0 : f.type==='money' ? 0.01 : f.type==='id' ? 1 : undefined} step={f.type==='money' ? '0.01' : 1} minLength={f.type==='reason' ? 10 : undefined} maxLength={1000} value={values[f.name] ?? ''} onChange={e=>{setValues(v=>({...v,[f.name]:e.target.value}));setConfirm(false)}} />}</label>)}
