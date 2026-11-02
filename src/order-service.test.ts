@@ -23,6 +23,14 @@ describe('order service', () => {
     expect(JSON.parse(fetch.mock.calls[3][1].body)).toEqual({ ...input, trackingNumber: 'AB123456789GB' })
     expect(JSON.parse(fetch.mock.calls[2][1].body)).toEqual({})
   })
+  it('reads and validates authoritative Stripe environment without credentials', async () => {
+    const fetch = vi.fn().mockResolvedValue(response({ stripeEnvironment: 'TEST', refundReconciliationEnabled: false }))
+    const api = new OrderService({ authenticatedFetch: fetch })
+    expect(await api.paymentEnvironment()).toEqual({ stripeEnvironment: 'TEST', refundReconciliationEnabled: false })
+    expect(fetch).toHaveBeenCalledExactlyOnceWith('/admin/payment-environment', {})
+    const unknown = new OrderService({ authenticatedFetch: vi.fn().mockResolvedValue(response({ stripeEnvironment: 'MAYBE', refundReconciliationEnabled: true })) })
+    await expect(unknown.paymentEnvironment()).rejects.toThrow(/environment status is unavailable/)
+  })
   it('uses seller cancellation and preserves payment safety errors', async () => {
     const fetch = vi.fn().mockResolvedValueOnce(response({ status: 'CANCELLED' })).mockResolvedValueOnce(response({ error: { code: 'ORDER_ALREADY_PAID', message: 'paid' } }, 409))
     const api = new OrderService({ authenticatedFetch: fetch })

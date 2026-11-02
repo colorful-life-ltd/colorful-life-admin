@@ -29,6 +29,7 @@ export interface OrderDetail extends OrderSummary {
   deliveryRecipientName: string; deliveryLine1: string; deliveryLine2: string | null
   deliveryCity: string; deliveryCounty: string | null; deliveryPostcode: string; deliveryCountryCode: string; deliveryPhone: string | null
   orderItems: Array<{ id: number; quantity: number; unitPrice: string; lineTotal: string; productListing: { id: number; condition: string; legoProduct: { id: number; setNumber: string; title: string } } }>
+  financials?: { shipping: { chargePence: number } | null }
   fulfilment: { stage: FulfilmentStage; preparingAt: string | null; dispatchedAt: string | null; shipments: Shipment[] }
   fulfilmentEvents: Array<{ id: number; action: string; fromStage: FulfilmentStage; toStage: FulfilmentStage; source: string; createdAt: string; performedByUser: { id: number; email: string } }>
 }
@@ -36,6 +37,7 @@ export interface OrderPage { items: OrderSummary[]; pagination: { page: number; 
 export interface DispatchInput { carrier: Carrier; carrierName?: string; trackingNumber: string; actualShippingCost: number }
 export interface AdminOrdersApi {
   financials(id: number): Promise<import('./order-financials.js').OrderFinancials>
+  paymentEnvironment(): Promise<import('./payment-environment.js').PaymentEnvironment>
   list(page?: number, pageSize?: number): Promise<OrderPage>
   get(id: number): Promise<OrderDetail>
   preparing(id: number): Promise<OrderDetail>

@@ -61,7 +61,7 @@ it('GETs only expected paths and explicitly whitelists fields before IPC', async
   const result = await new OrderService({ authenticatedFetch: fetch }).financials(41)
   expect(fetch.mock.calls.map(c => c.slice(0, 2))).toEqual([['/orders/41/payments', {}], ['/orders/41/refunds', {}]])
   expect(JSON.stringify(result)).not.toContain('SECRET')
-  expect(result.payment).toEqual({ state: 'ready', value: { id: 7, amount: '25', currency: 'GBP', provider: 'STRIPE', status: 'SUCCEEDED', paidAt: payment.paidAt, refundedAmount: '0', reservedRefundAmount: '0' } })
+  expect(result.payment).toEqual({ state: 'ready', value: { id: 7, amount: '25', currency: 'GBP', provider: 'STRIPE', status: 'SUCCEEDED', paidAt: payment.paidAt, refundedAmount: '0', reservedRefundAmount: '0', paymentIntentReference: 'pi_testfixture' } })
   expect(Object.keys(result.refunds.state === 'ready' ? result.refunds.value[0] : {})).toEqual(['id', 'paymentId', 'amount', 'currency', 'provider', 'status', 'createdAt', 'reason', 'actorId', 'resolutionCode', 'reviewRequired'])
 })
 it.each(['network', 'malformed', 'http'])('keeps failed refund history distinct from zero refunds: %s', async mode => {

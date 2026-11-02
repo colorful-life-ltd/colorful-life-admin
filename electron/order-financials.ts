@@ -3,6 +3,7 @@ export interface PaymentView {
   id: number; amount: string; currency: string; provider: string
   status: 'PENDING' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED'
   paidAt: string | null; refundedAmount: string; reservedRefundAmount: string
+  paymentIntentReference: string | null
 }
 export interface RefundView {
   id: number; paymentId: number; amount: string; currency: string; provider: string
@@ -54,7 +55,10 @@ export function parsePayments(value: unknown, orderId: number): PaymentView | nu
   if (!object(p) || !id(p.id) || p.orderId !== orderId || typeof p.currency !== 'string' || !provider(p.provider)
     || typeof p.status !== 'string' || !['PENDING', 'PROCESSING', 'SUCCEEDED', 'FAILED', 'CANCELED'].includes(p.status)
     || !(p.paidAt === null || timestamp(p.paidAt))) return invalid()
+  if (p.paymentIntentReference !== undefined && p.paymentIntentReference !== null
+    && (p.provider !== 'STRIPE' || typeof p.paymentIntentReference !== 'string' || !/^pi_[A-Za-z0-9]+$/.test(p.paymentIntentReference))) return invalid()
   const result: PaymentView = { id: p.id, amount: amount(p.amount, p.currency), currency: p.currency, provider: p.provider,
+    paymentIntentReference: typeof p.paymentIntentReference === 'string' ? p.paymentIntentReference : null,
     status: p.status as PaymentView['status'], paidAt: p.paidAt, refundedAmount: amount(p.refundedAmount, p.currency), reservedRefundAmount: amount(p.reservedRefundAmount, p.currency) }
   if (financialHundredths(result.amount, result.currency) <= 0n
     || financialHundredths(result.refundedAmount, result.currency) + financialHundredths(result.reservedRefundAmount, result.currency) > financialHundredths(result.amount, result.currency)) return invalid()

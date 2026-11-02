@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -22,15 +23,17 @@ const setup = (detail = returnCase) => {
   }
   window.adminOrders = {
     financials: vi.fn().mockResolvedValue(financials),
+    paymentEnvironment: vi.fn().mockResolvedValue({ stripeEnvironment: 'TEST', refundReconciliationEnabled: true }),
     list: vi.fn().mockResolvedValue(orderPage),
     get: vi.fn().mockResolvedValue(order),
     preparing: vi.fn(),
     dispatch: vi.fn(),
     cancel: vi.fn(),
   }
+  window.adminConnection = { status: vi.fn().mockResolvedValue({ mode: 'remote-sandbox', state: 'connected', message: 'Connected' }), retry: vi.fn() }
   window.adminOperations = {
     read: vi.fn().mockResolvedValue({}),
-    execute: vi.fn().mockResolvedValue({ id: 91, status: 'PROCESSING' }),
+    execute: vi.fn().mockResolvedValue({ refundId: 91, status: 'PROCESSING', amount: '23.98', currency: 'GBP', provider: 'STRIPE' }),
     pending: vi.fn().mockResolvedValue([]),
     finish: vi.fn().mockResolvedValue(undefined),
     resolve: vi.fn().mockResolvedValue({}),
@@ -269,86 +272,136 @@ it('shows refused actions inside the active modal so the operator can read the e
 const completedReturn = () => {
   const detail = structuredClone(returnCase)
   detail.submissions[0].lines[0].status = 'COMPLETED'
+  detail.submissions[0].lines[0].orderItemId = 3
   detail.submissions[0].lines[0].completedAt = '2026-10-30T10:00:00Z'
   return detail
 }
-const openRefund = async (detail = completedReturn()) => {
+const openRefund = async (detail = completedReturn(), orderOverride = order) => {
   setup(detail)
+  vi.mocked(window.adminOrders.get).mockResolvedValue(orderOverride)
+  render(<Returns navigation={{ orderId: 41, status: '', page: 1 }} onNavigate={vi.fn()} onViewOriginalOrder={vi.fn()} />)
+  const opener = await screen.findByRole('button', { name: 'Review refund' })
+  opener.focus()
+  fireEvent.click(opener)
+  return await screen.findByRole('dialog', { name: /Refund · BB-R-41/ })
+}
+it('opens a dedicated modal with verified payment context and no prefilled amount', async () => {
+  const dialog = await openRefund()
+  expect(within(dialog).getByText('pi_testfixture')).toBeInTheDocument()
+  expect(within(dialog).getAllByText('£25.00 GBP')).toHaveLength(2)
+  expect(within(dialog).getByRole('status')).toHaveTextContent(/Stripe environment: TEST/)
+  expect(within(dialog).getByLabelText('Refund amount (GBP)')).toHaveValue('')
+  expect(window.adminOperations.execute).not.toHaveBeenCalled()
+})
+it('moves focus into the modal and returns focus to the opener when Escape closes it', async () => {
+  const dialog = await openRefund()
+  expect(within(dialog).getByLabelText('Refund amount (GBP)')).toHaveFocus()
+  dialog.dispatchEvent(new Event('cancel', { cancelable: true }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  expect(screen.getByRole('button', { name: 'Review refund' })).toHaveFocus()
+})
+it('fill-in controls use exact cents and only change the amount field', async () => {
+  const dialog = await openRefund(completedReturn(), { ...order, totalAmount: '28.00', financials: { shipping: { chargePence: 300 } } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Use returned items value' }))
+  expect(within(dialog).getByLabelText('Refund amount (GBP)')).toHaveValue('12.50')
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Add delivery charge' }))
+  expect(within(dialog).getByLabelText('Refund amount (GBP)')).toHaveValue('15.50')
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Use full available amount' }))
+  expect(within(dialog).getByLabelText('Refund amount (GBP)')).toHaveValue('25.00')
+  expect(window.adminOperations.execute).not.toHaveBeenCalled()
+})
+it('validates empty, zero, malformed and over-capacity amounts before creating an operation intent', async () => {
+  const dialog = await openRefund()
+  const amount = within(dialog).getByLabelText('Refund amount (GBP)')
+  fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'FAULTY' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Continue' }))
+  expect(within(dialog).getByRole('alert')).toHaveTextContent(/Enter an amount/)
+  for (const value of ['0.00', '-1.00', '1e2', '25.01']) {
+    fireEvent.change(amount, { target: { value } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Continue' }))
+    expect(window.adminOperations.execute).not.toHaveBeenCalled()
+  }
+  expect(within(dialog).getByRole('alert')).toHaveTextContent(/exceeds the available/)
+})
+it('requires the confirmation step and initiates exactly once with the selected amount/reason', async () => {
+  const dialog = await openRefund()
+  fireEvent.change(within(dialog).getByLabelText('Refund amount (GBP)'), { target: { value: '23.98' } })
+  fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'FAULTY' } })
+  fireEvent.change(within(dialog).getByLabelText('Optional note'), { target: { value: 'Returned item inspected' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Continue' }))
+  expect(within(dialog).getByText('Review before refunding')).toBeInTheDocument()
+  const final = within(dialog).getByRole('button', { name: 'Refund £23.98 GBP' })
+  expect(final).toBeEnabled()
+  expect(within(dialog).getByText(/BB-R-41 — Faulty — Returned item inspected/)).toBeInTheDocument()
+  expect(window.adminOperations.execute).not.toHaveBeenCalled()
+  fireEvent.click(final)
+  fireEvent.click(final)
+  await waitFor(() => expect(window.adminOperations.execute).toHaveBeenCalledOnce())
+  expect(window.adminOperations.execute).toHaveBeenCalledWith('refund', { orderId: 41, paymentId: 7, amount: 23.98, reason: 'BB-R-41 — Faulty — Returned item inspected' })
+  expect(await within(dialog).findByText(/Refund pending/)).toBeInTheDocument()
+  expect(window.adminOperations.finish).not.toHaveBeenCalled()
+})
+it.each([
+  [{ refundId: 90, status: 'SUCCEEDED', amount: '1.00', currency: 'GBP', provider: 'STRIPE', resolutionCode: 'REFUND_SUCCEEDED', reviewRequired: false }, 'Refund succeeded', false],
+  [{ refundId: 90, status: 'FAILED', amount: '1.00', currency: 'GBP', provider: 'STRIPE', resolutionCode: 'REFUND_FAILED', reviewRequired: false }, 'Refund failed', false],
+  [{ refundId: 90, status: 'PROCESSING', amount: '1.00', currency: 'GBP', provider: 'STRIPE', resolutionCode: 'PROVIDER_EVIDENCE_MISMATCH', reviewRequired: true }, 'Refund needs review', true],
+] as const)('shows the authoritative refund outcome without overstating settlement', async (response, title, needsReview) => {
+  const dialog = await openRefund()
+  vi.mocked(window.adminOperations.execute).mockResolvedValueOnce(response)
+  fireEvent.change(within(dialog).getByLabelText('Refund amount (GBP)'), { target: { value: '1.00' } })
+  fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'GOODWILL' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Continue' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Refund £1.00 GBP' }))
+  expect(await within(dialog).findByRole('heading', { name: title })).toBeInTheDocument()
+  if (needsReview) expect(within(dialog).getByText(/provider evidence mismatch/i)).toBeInTheDocument()
+  expect(dialog.textContent).not.toContain("reached the customer's bank")
+})
+it('fails closed on UNKNOWN and blocks a Sandbox connection reporting LIVE', async () => {
+  const detail = completedReturn(); setup(detail)
+  vi.mocked(window.adminOrders.paymentEnvironment).mockResolvedValueOnce({ stripeEnvironment: 'UNKNOWN', refundReconciliationEnabled: false })
   render(<Returns navigation={{ orderId: 41, status: '', page: 1 }} onNavigate={vi.fn()} onViewOriginalOrder={vi.fn()} />)
   fireEvent.click(await screen.findByRole('button', { name: 'Review refund' }))
-  return screen.getByRole('dialog', { name: 'Refund workflow' })
-}
-it('opens the existing refund operation with order/payment preselected and requires amount, reason and explicit confirmation', async () => {
-  const dialog = await openRefund()
-  expect(within(dialog).getByLabelText('Order ID')).toHaveValue(41)
-  expect(within(dialog).getByLabelText('Payment ID')).toHaveValue(7)
-  const amount = within(dialog).getByLabelText('Refund amount (GBP)')
-  const reason = within(dialog).getByLabelText('Reason (at least 10 characters)')
-  const confirm = within(dialog).getByRole('checkbox')
-  const submit = within(dialog).getByRole('button', { name: 'Initiate refund' })
-  expect(amount).toHaveValue(null)
-  expect(reason).toHaveValue('')
-  expect(submit).toBeDisabled()
-  fireEvent.change(amount, { target: { value: '10.00' } })
-  fireEvent.change(reason, { target: { value: 'Returned item refund' } })
-  expect(submit).toBeDisabled()
-  fireEvent.submit(submit.closest('form')!)
+  let dialog = await screen.findByRole('dialog', { name: /Refund · BB-R-41/ })
+  expect(within(dialog).getByText(/status is unverified; refund is blocked/)).toBeInTheDocument()
+  expect(within(dialog).getByLabelText('Refund amount (GBP)')).toBeDisabled()
   expect(window.adminOperations.execute).not.toHaveBeenCalled()
-  fireEvent.click(confirm)
-  expect(submit).toBeEnabled()
-  expect(window.adminOperations.execute).not.toHaveBeenCalled()
-})
-it('does not offer initiation when financial records are inconsistent or the payment is not succeeded', async () => {
-  const detail = completedReturn()
-  setup(detail)
-  vi.mocked(window.adminOrders.financials).mockResolvedValueOnce({ ...financials, consistent: false })
-  render(<Returns navigation={{ orderId: 41, status: '', page: 1 }} onNavigate={vi.fn()} onViewOriginalOrder={vi.fn()} />)
-  expect(await screen.findByText(/Refund state unavailable or inconsistent/)).toBeInTheDocument()
-  expect(screen.queryByRole('button', { name: 'Review refund' })).toBeNull()
   cleanup()
   setup(detail)
-  vi.mocked(window.adminOrders.financials).mockResolvedValueOnce({ ...financials, payment: { state: 'ready', value: { ...financials.payment.value!, status: 'FAILED', paidAt: null } } })
+  vi.mocked(window.adminOrders.paymentEnvironment).mockResolvedValueOnce({ stripeEnvironment: 'LIVE', refundReconciliationEnabled: true })
   render(<Returns navigation={{ orderId: 41, status: '', page: 1 }} onNavigate={vi.fn()} onViewOriginalOrder={vi.fn()} />)
-  expect(await screen.findByText(/payment is not verified as succeeded/)).toBeInTheDocument()
-  expect(screen.queryByRole('button', { name: 'Review refund' })).toBeNull()
+  fireEvent.click(await screen.findByRole('button', { name: 'Review refund' }))
+  dialog = await screen.findByRole('dialog', { name: /Refund · BB-R-41/ })
+  expect(within(dialog).getByRole('alert')).toHaveTextContent(/Sandbox connection \/ LIVE Stripe mismatch/)
+  expect(within(dialog).getByLabelText('Refund amount (GBP)')).toBeDisabled()
 })
-it('shows pending refunds as order-level and offers reconciliation instead of a second initiation', async () => {
-  const detail = completedReturn()
-  setup(detail)
-  const processing = { ...parseRefunds([refund], 41)[0], status: 'PROCESSING' as const, resolutionCode: null, reviewRequired: false }
+it('requires extra LIVE confirmation and presents real-money warning', async () => {
+  const detail = completedReturn(); setup(detail)
+  vi.mocked(window.adminOrders.paymentEnvironment).mockResolvedValueOnce({ stripeEnvironment: 'LIVE', refundReconciliationEnabled: true })
+  vi.mocked(window.adminConnection!.status).mockResolvedValueOnce({ mode: 'direct', state: 'connected', message: 'Direct' })
+  render(<Returns navigation={{ orderId: 41, status: '', page: 1 }} onNavigate={vi.fn()} onViewOriginalOrder={vi.fn()} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Review refund' }))
+  const dialog = await screen.findByRole('dialog', { name: /Refund · BB-R-41/ })
+  fireEvent.change(within(dialog).getByLabelText('Refund amount (GBP)'), { target: { value: '1.00' } })
+  fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'GOODWILL' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Continue' }))
+  expect(within(dialog).getByText(/real money will be refunded/)).toBeInTheDocument()
+  expect(within(dialog).getByRole('button', { name: 'Refund £1.00 GBP' })).toBeDisabled()
+  fireEvent.click(within(dialog).getByRole('checkbox', { name: /I understand this LIVE Stripe refund/ }))
+  expect(within(dialog).getByRole('button', { name: 'Refund £1.00 GBP' })).toBeEnabled()
+  expect(window.adminOperations.execute).not.toHaveBeenCalled()
+})
+it('keeps pending and review-required refunds from offering a new refund, with truthful recovery availability', async () => {
+  const detail = completedReturn(); setup(detail)
+  const processing = { ...parseRefunds([refund], 41)[0], status: 'PROCESSING' as const, resolutionCode: 'PROVIDER_PENDING', reviewRequired: false }
   vi.mocked(window.adminOrders.financials).mockResolvedValueOnce({
     payment: { state: 'ready', value: { ...financials.payment.value!, reservedRefundAmount: '5' } },
     refunds: { state: 'ready', value: [processing] }, consistent: true,
   })
+  vi.mocked(window.adminOrders.paymentEnvironment).mockResolvedValueOnce({ stripeEnvironment: 'TEST', refundReconciliationEnabled: false })
   render(<Returns navigation={{ orderId: 41, status: '', page: 1 }} onNavigate={vi.fn()} onViewOriginalOrder={vi.fn()} />)
-  expect(await screen.findByText(/Refund records apply to the order payment/)).toBeInTheDocument()
-  expect(screen.getByText(/Refund #8: PROCESSING/)).toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', { name: 'Reconcile refund #8' }))
-  const dialog = screen.getByRole('dialog', { name: 'Refund workflow' })
-  expect(within(dialog).getByLabelText('Order ID')).toHaveValue(41)
-  expect(within(dialog).getByLabelText('Refund ID')).toHaveValue(8)
-  expect(within(dialog).getByRole('button', { name: 'Reconcile refund' })).toBeDisabled()
-  expect(screen.queryByRole('button', { name: /^Review refund$/ })).toBeNull()
-})
-it('refreshes and displays the recorded refund state after the existing operation succeeds', async () => {
-  const detail = completedReturn()
-  setup(detail)
-  const processing = { ...parseRefunds([refund], 41)[0], id: 91, status: 'PROCESSING' as const, resolutionCode: null, reviewRequired: false }
-  vi.mocked(window.adminOrders.financials)
-    .mockResolvedValueOnce(financials)
-    .mockResolvedValueOnce({
-      payment: { state: 'ready', value: { ...financials.payment.value!, reservedRefundAmount: '5' } },
-      refunds: { state: 'ready', value: [processing] }, consistent: true,
-    })
-  render(<Returns navigation={{ orderId: 41, status: '', page: 1 }} onNavigate={vi.fn()} onViewOriginalOrder={vi.fn()} />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Review refund' }))
-  const dialog = screen.getByRole('dialog', { name: 'Refund workflow' })
-  fireEvent.change(within(dialog).getByLabelText('Refund amount (GBP)'), { target: { value: '5.00' } })
-  fireEvent.change(within(dialog).getByLabelText('Reason (at least 10 characters)'), { target: { value: 'Returned item' } })
-  fireEvent.click(within(dialog).getByRole('checkbox'))
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Initiate refund' }))
-  expect(window.adminOperations.execute).toHaveBeenCalledWith('refund', { orderId: 41, paymentId: 7, amount: 5, reason: 'Returned item' })
-  expect(await screen.findByText(/Refund #91: PROCESSING/)).toBeInTheDocument()
-  expect(screen.getByText(/Refund records apply to the order payment/)).toBeInTheDocument()
-  expect(screen.queryByText(/Refund issued for Line #/)).toBeNull()
+  fireEvent.click(await screen.findByRole('button', { name: 'Review refund status' }))
+  const dialog = await screen.findByRole('dialog', { name: /Refund · BB-R-41/ })
+  expect(within(dialog).getByText(/Status checking is currently unavailable/)).toBeInTheDocument()
+  expect(within(dialog).queryByRole('button', { name: 'Refund £' })).toBeNull()
+  expect(window.adminOperations.execute).not.toHaveBeenCalled()
 })

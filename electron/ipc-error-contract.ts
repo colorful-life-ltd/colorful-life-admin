@@ -4,6 +4,7 @@ export interface SerializedIpcError {
   code: string | null
   backendCode: string | null
   status: number | null
+  refundSubmissionDisposition?: 'NOT_SUBMITTED' | null
 }
 
 export interface IpcErrorEnvelope {
@@ -24,6 +25,7 @@ export function serializeIpcError(error: unknown): IpcErrorEnvelope {
       code: typeof value.code === 'string' ? value.code : null,
       backendCode: typeof value.backendCode === 'string' ? value.backendCode : null,
       status: typeof value.status === 'number' ? value.status : null,
+      refundSubmissionDisposition: value.refundSubmissionDisposition === 'NOT_SUBMITTED' ? 'NOT_SUBMITTED' : null,
     },
   }
 }
@@ -34,7 +36,8 @@ export function isIpcErrorEnvelope(value: unknown): value is IpcErrorEnvelope {
   return typeof details.name === 'string' && typeof details.message === 'string' &&
     (typeof details.code === 'string' || details.code === null) &&
     (typeof details.backendCode === 'string' || details.backendCode === null) &&
-    (typeof details.status === 'number' || details.status === null)
+    (typeof details.status === 'number' || details.status === null) &&
+    (details.refundSubmissionDisposition === undefined || details.refundSubmissionDisposition === 'NOT_SUBMITTED' || details.refundSubmissionDisposition === null)
 }
 
 export function restoreIpcError(envelope: IpcErrorEnvelope): AdminIpcError {
@@ -44,6 +47,7 @@ export function restoreIpcError(envelope: IpcErrorEnvelope): AdminIpcError {
   error.code = details.code
   error.backendCode = details.backendCode
   error.status = details.status
+  error.refundSubmissionDisposition = details.refundSubmissionDisposition
   return error
 }
 
@@ -51,5 +55,6 @@ export function isAdminIpcError(value: unknown): value is AdminIpcError {
   if (!(value instanceof Error) || !isRecord(value)) return false
   return (typeof value.code === 'string' || value.code === null) &&
     (typeof value.backendCode === 'string' || value.backendCode === null) &&
-    (typeof value.status === 'number' || value.status === null)
+    (typeof value.status === 'number' || value.status === null) &&
+    (value.refundSubmissionDisposition === undefined || value.refundSubmissionDisposition === 'NOT_SUBMITTED' || value.refundSubmissionDisposition === null)
 }

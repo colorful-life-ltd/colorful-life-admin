@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { adminReturns } from './admin-api'
-import Operations from './Operations'
+import RefundModal from './RefundModal'
 import { financialHundredths, formatFinancialAmount, refundOutcomeUncertain } from '../electron/order-financials'
-import type { OrderFinancials, RefundView } from '../electron/order-financials'
+import type { OrderFinancials } from '../electron/order-financials'
+import type { OrderDetail } from '../electron/order-contract'
+import type { PaymentEnvironment } from '../electron/payment-environment'
 import {
   returnLabel,
   returnStatuses,
@@ -29,17 +31,22 @@ export default function Returns({
   navigation,
   onNavigate,
   onViewOriginalOrder,
+  onViewOperatorWorkflows,
   sessionBlocked = false,
 }: {
   navigation: ReturnsNavigation
   onNavigate: (next: ReturnsNavigation) => void
   onViewOriginalOrder: (id: number) => void
+  onViewOperatorWorkflows?: () => void
   sessionBlocked?: boolean
 }) {
   const [queue, setQueue] = useState<ReturnQueue | null>(null),
     [detail, setDetail] = useState<ReturnCaseView | null>(null),
     [financials, setFinancials] = useState<OrderFinancials | null>(null),
-    [refundOperation, setRefundOperation] = useState<{ operation: 'refund' | 'reconcile' | 'refundReview'; values: Record<string, string> } | null>(null),
+    [orderDetail, setOrderDetail] = useState<OrderDetail | null>(null),
+    [paymentEnvironment, setPaymentEnvironment] = useState<PaymentEnvironment | null>(null),
+    [connectionMode, setConnectionMode] = useState<'direct' | 'remote-sandbox' | null>(null),
+    [refundModalOpen, setRefundModalOpen] = useState(false),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(''),
     [revision, setRevision] = useState(0),
@@ -59,7 +66,9 @@ export default function Returns({
       setError('')
       setDetail(null)
       setFinancials(null)
-      setRefundOperation(null)
+      setOrderDetail(null)
+      setPaymentEnvironment(null)
+      setRefundModalOpen(false)
       setQueue(null)
       setSelection(null)
       try {
@@ -70,14 +79,20 @@ export default function Returns({
           )
           if (active) setQueue(q)
         } else {
-          const [d, f] = await Promise.allSettled([
+          const [d, f, o, e, c] = await Promise.allSettled([
             adminReturns.get(navigation.orderId),
             window.adminOrders.financials(navigation.orderId),
+            window.adminOrders.get(navigation.orderId),
+            window.adminOrders.paymentEnvironment(),
+            window.adminConnection!.status(),
           ])
           if (active && d.status === 'fulfilled') setDetail(d.value)
           else if (active && d.status === 'rejected') throw d.reason
           if (active && f.status === 'fulfilled') setFinancials(f.value)
           else if (active && f.status === 'rejected') setFinancials(null)
+          if (active && o.status === 'fulfilled') setOrderDetail(o.value)
+          if (active && e.status === 'fulfilled') setPaymentEnvironment(e.value)
+          if (active && c.status === 'fulfilled') setConnectionMode(c.value.mode)
         }
       } catch (e) {
         if (active) setError(errorMessage(e))
@@ -119,11 +134,14 @@ export default function Returns({
   }
   const navigate = (next: Partial<ReturnsNavigation>) =>
     onNavigate({ ...navigation, ...next })
-  const refreshFinancials = async () => {
-    if (detail) {
-      try { setFinancials(await window.adminOrders.financials(detail.orderId)) }
-      catch { setFinancials(null) }
-    }
+  const refreshRefundData = async () => {
+    if (!detail) return
+    const [f, o, e] = await Promise.allSettled([
+      window.adminOrders.financials(detail.orderId), window.adminOrders.get(detail.orderId), window.adminOrders.paymentEnvironment(),
+    ])
+    if (f.status === 'fulfilled') setFinancials(f.value)
+    if (o.status === 'fulfilled') setOrderDetail(o.value)
+    if (e.status === 'fulfilled') setPaymentEnvironment(e.value)
   }
   const completedReturn = detail?.submissions.some((s) => s.lines.some((line) => line.status === 'COMPLETED')) ?? false
   const payment = financials?.payment.state === 'ready' ? financials.payment.value : null
@@ -135,12 +153,7 @@ export default function Returns({
     catch { remainingRefundable = 0n }
   }
   const financialsReady = !!financials && financials.payment.state === 'ready' && financials.refunds.state === 'ready' && financials.consistent
-  const eligiblePayment = financialsReady && payment?.status === 'SUCCEEDED' && !!payment.paidAt && payment.provider === 'STRIPE'
-  const canInitiateRefund = completedReturn && eligiblePayment && remainingRefundable > 0n && !uncertainRefund && !sessionBlocked
-  const openRefundWorkflow = (refund: RefundView) => setRefundOperation({
-    operation: refund.reviewRequired || (refund.status !== 'PROCESSING' && refundOutcomeUncertain(refund)) ? 'refundReview' : 'reconcile',
-    values: { orderId: String(detail!.orderId), refundId: String(refund.id) },
-  })
+  const canReviewRefund = (completedReturn && !!payment && payment.provider === 'STRIPE' && payment.status === 'SUCCEEDED') || !!refunds?.length
   return (
     <section className="returns-workspace" aria-labelledby="returns-title">
       <header>
@@ -276,15 +289,10 @@ export default function Returns({
                 Refund #{refund.id}: {refund.status} · {formatFinancialAmount(refund.amount, refund.currency)}
                 {refundOutcomeUncertain(refund) && <span> · Outcome requires review</span>}
                 {refund.status === 'PROCESSING' && <span> · Pending or unresolved</span>}
-                {(refund.reviewRequired || (refund.status !== 'PROCESSING' && refundOutcomeUncertain(refund))) && <button className="button button-secondary" disabled={sessionBlocked} onClick={() => openRefundWorkflow(refund)}>Review refund #{refund.id}</button>}
-                {refund.status === 'PROCESSING' && !refund.reviewRequired && <button className="button button-secondary" disabled={sessionBlocked} onClick={() => openRefundWorkflow(refund)}>Reconcile refund #{refund.id}</button>}
               </li>)}</ul>}
               {uncertainRefund && <p role="status">A refund outcome needs resolution before another refund can be initiated.</p>}
               {!uncertainRefund && remainingRefundable <= 0n && <p>No refundable balance remains.</p>}
-              {canInitiateRefund && <>
-                <p>Refund processing is a separate operator decision. Review the partial amount, any shipping refund, and the reason; no amount is preselected.</p>
-                <button className="button button-primary" disabled={!canInitiateRefund} onClick={() => setRefundOperation({ operation: 'refund', values: { orderId: String(detail.orderId), paymentId: String(payment!.id) } })}>Review refund</button>
-              </>}
+              {canReviewRefund && <button className="button button-primary" disabled={sessionBlocked} onClick={() => setRefundModalOpen(true)}>{uncertainRefund ? 'Review refund status' : 'Review refund'}</button>}
               {financialsReady && payment && payment.status !== 'SUCCEEDED' && <p>Refund unavailable: payment is not verified as succeeded.</p>}
             </>}
           </section>}
@@ -404,18 +412,12 @@ export default function Returns({
           onClose={() => setSelection(null)}
         />
       )}
-      {refundOperation && detail && (
-        <dialog className="return-decision" aria-label="Refund workflow" open>
-          <button className="button button-secondary" onClick={() => setRefundOperation(null)}>Close refund workflow</button>
-          <Operations
-            sessionBlocked={sessionBlocked}
-            onlyOperation={refundOperation.operation}
-            initialOperation={refundOperation.operation}
-            initialValues={refundOperation.values}
-            onActionComplete={async () => { await refreshFinancials(); setRefundOperation(null) }}
-          />
-        </dialog>
-      )}
+      {refundModalOpen && detail && <RefundModal
+        detail={detail} order={orderDetail} financials={financials} environment={paymentEnvironment}
+        connectionMode={connectionMode} sessionBlocked={sessionBlocked}
+        onClose={() => setRefundModalOpen(false)} onRefresh={refreshRefundData}
+        onOpenOperatorWorkflows={() => { setRefundModalOpen(false); onViewOperatorWorkflows?.() }}
+      />}
     </section>
   )
 }

@@ -96,6 +96,7 @@ contextBridge.exposeInMainWorld('adminPurchases', adminPurchases)
 
 const adminOrders: AdminOrdersApi = {
   financials: (id) => forwardIpcResult(ipcRenderer.invoke('admin-orders:financials', id)),
+  paymentEnvironment: () => forwardIpcResult(ipcRenderer.invoke('admin-orders:payment-environment')),
   list: (page, pageSize) => forwardIpcResult(ipcRenderer.invoke('admin-orders:list', page, pageSize)),
   get: (id) => forwardIpcResult(ipcRenderer.invoke('admin-orders:get', id)),
   preparing: (id) => forwardIpcResult(ipcRenderer.invoke('admin-orders:preparing', id)),

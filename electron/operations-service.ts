@@ -117,7 +117,7 @@ export class OperationsService implements AdminOperationsApi {
     const response = await this.auth.authenticatedFetch(path, { method, ...(method === 'GET' ? {} : { headers: { 'Content-Type':'application/json', 'Idempotency-Key':key! }, body: JSON.stringify(body) }), signal: AbortSignal.timeout(30000) })
     if (!response.ok) {
       const error = await readBackendError(response, 'Operator request failed. Refresh authoritative state.')
-      throw Object.assign(new Error(messages[error.code ?? ''] ?? error.message), { code:'api',backendCode:error.code,status:response.status })
+      throw Object.assign(new Error(messages[error.code ?? ''] ?? error.message), { code:'api',backendCode:error.code,status:response.status,refundSubmissionDisposition:error.refundSubmissionDisposition })
     }
     return safeOperationResult(await response.json())
   }
@@ -135,7 +135,7 @@ export class OperationsService implements AdminOperationsApi {
       const scope = await this.scope(), intents = this.load(scope), slot = intentSlot(op, input)
       const previous = intents.find(i => intentSlot(i.operation, i.input) === slot)
       if (previous && JSON.stringify(previous.input) !== JSON.stringify(input)) return invalid('A saved intent exists for this operation and target. Resolve it before editing the payload.')
-      if (previous?.state === 'confirmed') return invalid('This intent already succeeded. Refresh history and finish the saved action before starting another.')
+      if (previous?.state === 'confirmed' && !(op === 'refund' && spec.replaySafe)) return invalid('This intent already succeeded. Refresh history and finish the saved action before starting another.')
       if (previous?.state === 'uncertain' && !spec.replaySafe) return invalid('The outcome is uncertain and this endpoint does not guarantee replay. Do not resubmit. Investigate authoritative history, then record the investigated outcome.')
       if (!previous && intents.length >= MAX_INTENTS) return invalid('Too many saved operator intents. Finish or resolve existing intents first.')
       const saved: SavedOperation = previous ?? { operation:op,input,key:randomUUID(),state:'uncertain' }
@@ -146,8 +146,16 @@ export class OperationsService implements AdminOperationsApi {
         this.save(scope,[...others,{...saved,state:'confirmed'}])
         return result
       } catch (e) {
+        // A refund can be released for correction only when the Backend explicitly
+        // says it did not create a refund or contact Stripe. An earlier uncertain
+        // attempt stays retained even if a later response is contradictory.
+        if (op === 'refund' && previous?.state !== 'uncertain' && record(e)
+          && e.refundSubmissionDisposition === 'NOT_SUBMITTED' && e.backendCode !== 'IDEMPOTENCY_CONFLICT') {
+          this.save(scope,others)
+          throw e
+        }
         // A definitive 4xx refusal never applied; a later error cannot erase an earlier uncertain write.
-        if (previous?.state !== 'uncertain' && record(e) && typeof e.status === 'number' && e.status >= 400 && e.status < 500 && e.backendCode !== 'IDEMPOTENCY_CONFLICT') this.save(scope,[...others,{...saved,state:'rejected'}])
+        if (op !== 'refund' && previous?.state !== 'uncertain' && record(e) && typeof e.status === 'number' && e.status >= 400 && e.status < 500 && e.backendCode !== 'IDEMPOTENCY_CONFLICT') this.save(scope,[...others,{...saved,state:'rejected'}])
         throw e
       }
     })
