@@ -9,7 +9,7 @@ import type { OrderDetail } from '../electron/order-contract'
 beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
   HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
-  window.adminOrders = { financials: vi.fn().mockResolvedValue(financials), paymentEnvironment: vi.fn().mockResolvedValue({stripeEnvironment:'TEST',refundReconciliationEnabled:true}), list: vi.fn().mockResolvedValue(orderPage), get: vi.fn().mockResolvedValue(order), preparing: vi.fn().mockResolvedValue(order), dispatch: vi.fn().mockResolvedValue(order), cancel: vi.fn().mockResolvedValue(undefined) }
+  window.adminOrders = { financials: vi.fn().mockResolvedValue(financials), paymentEnvironment: vi.fn().mockResolvedValue({stripeEnvironment:'TEST',refundReconciliationEnabled:true}), list: vi.fn().mockResolvedValue(orderPage), get: vi.fn().mockResolvedValue(order), preparing: vi.fn().mockResolvedValue(order), dispatch: vi.fn().mockResolvedValue(order), delivered: vi.fn().mockResolvedValue(order), cancel: vi.fn().mockResolvedValue(undefined) }
 })
 afterEach(cleanup)
 const open = async (value: OrderDetail = order) => {
@@ -268,4 +268,75 @@ it.each([['', 'Enter the actual shipping cost'], ['-1', 'negative'], ['abc', 'tw
   fireEvent.submit(confirm().closest('form')!)
   expect(await within(screen.getByRole('dialog')).findByRole('alert')).toHaveTextContent(text)
   expect(window.adminOrders.dispatch).not.toHaveBeenCalled()
+})
+
+const dispatchedOrder: OrderDetail = { ...order, status: 'DISPATCHED', fulfilmentStage: 'DISPATCHED', dispatchedAt: '2026-10-14T10:00:00Z', actualShippingCost: '3.99',
+  fulfilment: { stage: 'DISPATCHED', preparingAt: null, dispatchedAt: '2026-10-14T10:00:00Z', shipments: [{ sequence: 1, carrier: 'ROYAL_MAIL', carrierName: 'Royal Mail', trackingNumber: 'AB123456789GB', dispatchedAt: '2026-10-14T10:00:00Z', trackingUrl: 'https://www.royalmail.com/track-your-item#/tracking-results/AB123456789GB', trackingUrlIncludesNumber: true }] } }
+const deliveredOrder: OrderDetail = { ...dispatchedOrder, fulfilmentStage: 'DELIVERED',
+  fulfilment: { ...dispatchedOrder.fulfilment, stage: 'DELIVERED', shipments: [{ ...dispatchedOrder.fulfilment.shipments[0], tracking: { progress: 'DELIVERED', deliveredAt: '2026-10-16T09:30:00Z', deliveryConfirmation: 'MANUAL' } }] },
+  deliveryConfirmations: [{ shipmentId: 9, shipmentSequence: 1, confirmedAt: '2026-10-16T09:30:00Z', source: 'MANUAL_OPERATOR_CONFIRMATION', performedByUser: { id: 1, email: 'operator@example.com' } }] }
+const markDelivered = () => screen.queryByRole('button', { name: 'Mark as Delivered' })
+const confirmDelivery = () => within(screen.getByRole('dialog')).getByRole('button', { name: 'Confirm delivery' })
+const checkDelivery = () => fireEvent.click(within(screen.getByRole('dialog')).getByRole('checkbox', { name: /checked the carrier’s tracking website/ }))
+
+it('offers Mark as Delivered only for a dispatched shipment that is not yet delivered', async () => {
+  await open(); expect(markDelivered()).not.toBeInTheDocument(); cleanup()
+  await open({ ...dispatchedOrder, fulfilment: { ...dispatchedOrder.fulfilment, shipments: [] } }); expect(markDelivered()).not.toBeInTheDocument(); cleanup()
+  await open({ ...dispatchedOrder, status: 'COMPLETED' }); expect(markDelivered()).not.toBeInTheDocument(); cleanup()
+  await open(deliveredOrder); expect(markDelivered()).not.toBeInTheDocument()
+  expect(screen.getByText(/Delivered 16 Oct 2026, 09:30 \(confirmed manually\)|Delivered 16 Oct 2026, 10:30 \(confirmed manually\)/)).toBeInTheDocument()
+  expect(screen.getByText(/Delivered · Dispatched → Delivered · Shipment 1/)).toBeInTheDocument()
+  expect(screen.getByText(/operator@example.com · Manual confirmation \(carrier website checked\)/)).toBeInTheDocument()
+  cleanup()
+  await open(dispatchedOrder); expect(markDelivered()).toBeEnabled()
+})
+it('requires the manual carrier check and lets the operator back out without a request', async () => {
+  await open(dispatchedOrder)
+  fireEvent.click(markDelivered()!)
+  const dialog = screen.getByRole('dialog')
+  expect(dialog).toHaveTextContent('open the carrier’s tracking website and check that it shows this parcel as delivered')
+  expect(dialog).toHaveTextContent('Your account and the time are recorded')
+  expect(within(dialog).getByRole('link', { name: 'Open carrier tracking' })).toHaveAttribute('href', 'https://www.royalmail.com/track-your-item#/tracking-results/AB123456789GB')
+  expect(confirmDelivery()).toBeDisabled()
+  fireEvent.submit(confirmDelivery().closest('form')!)
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent('Confirm that you checked the carrier’s tracking website first')
+  fireEvent(dialog, new Event('cancel', { cancelable: true }))
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  fireEvent.click(markDelivered()!)
+  expect(within(screen.getByRole('dialog')).getByRole('checkbox')).not.toBeChecked()
+  checkDelivery(); fireEvent.click(screen.getByRole('button', { name: 'Go back' }))
+  expect(window.adminOrders.delivered).not.toHaveBeenCalled()
+})
+it('confirms delivery once, shows success and refreshes the order', async () => {
+  await open(dispatchedOrder)
+  fireEvent.click(markDelivered()!); checkDelivery()
+  let resolve!: (value: OrderDetail) => void
+  vi.mocked(window.adminOrders.delivered).mockImplementation(() => new Promise(r => { resolve = r }))
+  const form = confirmDelivery().closest('form')!
+  fireEvent.submit(form); fireEvent.submit(form)
+  expect(window.adminOrders.delivered).toHaveBeenCalledOnce()
+  expect(window.adminOrders.delivered).toHaveBeenCalledWith(41)
+  expect(screen.getByRole('button', { name: 'Submitting…' })).toBeDisabled()
+  vi.mocked(window.adminOrders.get).mockResolvedValue(deliveredOrder)
+  await act(async () => resolve(deliveredOrder))
+  expect(await screen.findByText('Delivery confirmed. The customer now sees this order as Delivered.')).toBeInTheDocument()
+  await waitFor(() => expect(markDelivered()).not.toBeInTheDocument())
+  expect(screen.getByText(/operator@example.com · Manual confirmation/)).toBeInTheDocument()
+  expect(window.adminOrders.get).toHaveBeenCalledTimes(2)
+})
+it('closes and refreshes on a duplicate confirmation, and keeps the dialog open for a retryable failure', async () => {
+  await open(dispatchedOrder)
+  fireEvent.click(markDelivered()!); checkDelivery()
+  vi.mocked(window.adminOrders.delivered).mockRejectedValueOnce(new Error('The Backend is unavailable. Try again.'))
+  fireEvent.submit(confirmDelivery().closest('form')!)
+  expect(await within(screen.getByRole('dialog')).findByRole('alert')).toHaveTextContent('The Backend is unavailable')
+  expect(within(screen.getByRole('dialog')).getByRole('checkbox')).toBeChecked()
+  const duplicate = Object.assign(new Error('This order has already been confirmed as delivered. The order has been refreshed.'), { code: 'api', backendCode: 'ORDER_ALREADY_DELIVERED', status: 409 })
+  vi.mocked(window.adminOrders.delivered).mockResolvedValueOnce(serializeIpcError(duplicate) as unknown as OrderDetail)
+  vi.mocked(window.adminOrders.get).mockResolvedValue(deliveredOrder)
+  fireEvent.submit(confirmDelivery().closest('form')!)
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  expect(await screen.findByRole('alert')).toHaveTextContent('already been confirmed as delivered')
+  await waitFor(() => expect(markDelivered()).not.toBeInTheDocument())
+  expect(window.adminOrders.delivered).toHaveBeenCalledTimes(2)
 })

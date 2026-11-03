@@ -12,3 +12,5 @@
 .order-dialog fieldset { border: 0; padding: 0; display: grid; gap: 8px; }
 .order-dialog input, .order-dialog select { padding: 10px; border: 1px solid var(--border); border-radius: 8px; font: inherit; }
 .order-dialog .field-hint { margin: 0; font-size: 0.9em; color: var(--text-muted); }
+.order-dialog .delivery-check { margin: 0 0 12px; padding-left: 20px; }
+.order-dialog .checkbox-label { display: flex; gap: 8px; align-items: flex-start; }

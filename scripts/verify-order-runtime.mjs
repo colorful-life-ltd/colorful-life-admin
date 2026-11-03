@@ -89,6 +89,14 @@ async function run() {
       order.status = 'DISPATCHED'; order.fulfilmentStage = 'DISPATCHED'; order.fulfilment.stage = 'DISPATCHED'; order.dispatchedAt = timestamp; order.actualShippingCost = String(body.actualShippingCost)
       order.fulfilment.shipments = [{ sequence: 1, carrier: 'ROYAL_MAIL', carrierName: 'Royal Mail', trackingNumber: body.trackingNumber, dispatchedAt: timestamp, trackingUrl: 'https://www.royalmail.com/track-your-item#/tracking-results/AB123456789GB', trackingUrlIncludesNumber: true }]
       data = order
+    } else if (req.url === '/admin/orders/41/fulfilment/delivered') {
+      assert.equal(req.method, 'POST'); assert.deepEqual(body, { verifiedOnCarrierWebsite: true })
+      if (order.fulfilment.stage === 'DELIVERED') { res.statusCode = 409; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ error: { code: 'ORDER_ALREADY_DELIVERED', message: 'already' } })); return }
+      const deliveredAt = new Date().toISOString()
+      order.fulfilmentStage = 'DELIVERED'; order.fulfilment.stage = 'DELIVERED'
+      order.fulfilment.shipments[0].tracking = { progress: 'DELIVERED', deliveredAt, deliveryConfirmation: 'MANUAL' }
+      order.deliveryConfirmations = [{ shipmentId: 9, shipmentSequence: 1, confirmedAt: deliveredAt, source: 'MANUAL_OPERATOR_CONFIRMATION', performedByUser: { id: 1, email: 'runtime-operator@test.invalid' } }]
+      data = order
     } else { res.statusCode = 404; data = { error: 'Unexpected fixture request' } }
     res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(data))
   })
@@ -194,6 +202,18 @@ async function run() {
     await until("document.body.textContent.includes('Track shipment 1')")
     await until("document.body.textContent.includes('Actual shipping cost: £3.99')")
     assert.equal(await js("document.body.textContent.includes('£399')"), false)
+    // Manual delivery: explicit carrier-website check, one authenticated request, refreshed order.
+    await click('Mark as Delivered')
+    await until("document.querySelector('dialog').matches(':modal') && document.querySelector('dialog').textContent.includes('carrier’s tracking website')")
+    assert.equal(await js("[...document.querySelectorAll('dialog button')].find(b => b.textContent === 'Confirm delivery').disabled"), true)
+    assert.equal(requests.some(r => r.path.endsWith('/fulfilment/delivered')), false)
+    await js("document.querySelector('dialog input[type=checkbox]').click()")
+    await js("(() => { const b = [...document.querySelectorAll('dialog button')].find(b => b.textContent === 'Confirm delivery'); b.click(); b.click() })()")
+    await until("document.body.textContent.includes('Delivery confirmed. The customer now sees this order as Delivered.')")
+    await until("document.body.textContent.includes('runtime-operator@test.invalid · Manual confirmation')")
+    assert.equal(await js("[...document.querySelectorAll('button')].some(b => b.textContent === 'Mark as Delivered')"), false)
+    const deliveredCalls = requests.filter(r => r.path.endsWith('/fulfilment/delivered'))
+    assert.equal(deliveredCalls.length, 1); assert.equal(deliveredCalls[0].auth, 'Bearer order-runtime-token')
     assert.equal(await js("[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Cancel Order')"), false)
     assert.equal(requests.filter(r => r.path.endsWith('/fulfilment/dispatch')).length, 2)
     assert(requests.filter(r => r.path.startsWith('/admin/orders')).every(r => r.auth === 'Bearer order-runtime-token'))

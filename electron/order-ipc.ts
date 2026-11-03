@@ -9,5 +9,6 @@ export function registerOrderIpc(handle: (channel: string, handler: OrderIpcHand
   handle('admin-orders:get', (_event, id) => service.get(validateOrderId(id)))
   handle('admin-orders:preparing', (_event, id) => service.preparing(validateOrderId(id)))
   handle('admin-orders:dispatch', (_event, id, input) => service.dispatch(validateOrderId(id), validateDispatch(input)))
+  handle('admin-orders:delivered', (_event, id) => service.delivered(validateOrderId(id)))
   handle('admin-orders:cancel', (_event, id, reason) => service.cancel(validateOrderId(id), validateReason(reason)))
 }

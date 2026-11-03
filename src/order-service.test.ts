@@ -2,7 +2,7 @@ import { AuthService } from '../electron/auth-service'
 import { describe, expect, it, vi } from 'vitest'
 import { OrderService, parseShippingCostPence, shippingCostPence, validateDispatch } from '../electron/order-service'
 import { order, orderPage } from './test-fixtures/order'
-import { canCancel, canFulfil } from '../electron/order-contract'
+import { canCancel, canFulfil, canMarkDelivered } from '../electron/order-contract'
 import { safeTrackingUrl } from '../electron/tracking-url'
 const input = { carrier: 'ROYAL_MAIL' as const, trackingNumber: 'ab 123-456789 gb', actualShippingCost: 3.5 }
 const response = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } })
@@ -130,5 +130,46 @@ describe('actual shipping cost precision (Order #10: 3.99 recorded as 399)', () 
     expect(fetch.mock.calls[0][1].body).toContain(`"actualShippingCost":${recorded}`)
     expect(shippingCostPence(body.actualShippingCost)).toBe(parseShippingCostPence(typed))
     expect(result.actualShippingCost).toBe(recorded)
+  })
+})
+
+describe('manual delivery confirmation', () => {
+  const delivered = { ...order, status: 'DISPATCHED', deliveryConfirmations: [{ shipmentId: 9, shipmentSequence: 1, confirmedAt: '2026-10-16T09:30:00.000Z', source: 'MANUAL_OPERATOR_CONFIRMATION', performedByUser: { id: 1, email: 'operator@example.com' } }] }
+  it('posts the explicit manual verification to the authenticated delivered endpoint', async () => {
+    const fetch = vi.fn().mockResolvedValue(response(delivered))
+    const result = await new OrderService({ authenticatedFetch: fetch }).delivered(41)
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch.mock.calls[0][0]).toBe('/admin/orders/41/fulfilment/delivered')
+    expect(fetch.mock.calls[0][1]).toMatchObject({ method: 'POST' })
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ verifiedOnCarrierWebsite: true })
+    expect(result.deliveryConfirmations?.[0].performedByUser?.email).toBe('operator@example.com')
+  })
+  it.each([
+    ['ORDER_ALREADY_DELIVERED', 409, 'already been confirmed as delivered'],
+    ['FULFILMENT_TRANSITION_INVALID', 409, 'state changed'],
+    ['FORBIDDEN', 403, ''],
+  ])('explains a rejected confirmation (%s)', async (code, status, text) => {
+    const fetch = vi.fn().mockResolvedValue(response({ error: { code, message: 'rejected' } }, status))
+    await expect(new OrderService({ authenticatedFetch: fetch }).delivered(41)).rejects.toMatchObject({ status, ...(text ? { message: expect.stringContaining(text) } : {}) })
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+  it('validates the order id before any request and rejects malformed delivery records', async () => {
+    const fetch = vi.fn(); const api = new OrderService({ authenticatedFetch: fetch })
+    for (const id of [0, -1, 1.5, NaN]) await expect(api.delivered(id)).rejects.toThrow()
+    expect(fetch).not.toHaveBeenCalled()
+    for (const bad of [{ confirmedAt: 'never' }, { source: 'CARRIER' }, { shipmentId: 0 }, { performedByUser: { id: 'x', email: null } }, { shipmentSequence: 'one' }]) {
+      const value = { ...delivered, deliveryConfirmations: [{ ...delivered.deliveryConfirmations[0], ...bad }] }
+      await expect(new OrderService({ authenticatedFetch: vi.fn().mockResolvedValue(response(value)) }).get(41)).rejects.toMatchObject({ code: 'malformed-response' })
+    }
+    await expect(new OrderService({ authenticatedFetch: vi.fn().mockResolvedValue(response({ ...delivered, deliveryConfirmations: {} })) }).get(41)).rejects.toMatchObject({ code: 'malformed-response' })
+    expect((await new OrderService({ authenticatedFetch: vi.fn().mockResolvedValue(response(order)) }).get(41)).deliveryConfirmations).toBeUndefined()
+  })
+  it('gates the action to dispatched, undelivered shipments', () => {
+    const dispatched = { ...order, status: 'DISPATCHED' as const, dispatchedAt: '2026-10-14T10:00:00Z', fulfilment: { ...order.fulfilment, stage: 'DISPATCHED' as const, shipments: [{ sequence: 1, carrier: 'ROYAL_MAIL' as const, carrierName: 'Royal Mail', trackingNumber: 'AB123456789GB', dispatchedAt: '2026-10-14T10:00:00Z', trackingUrl: null, trackingUrlIncludesNumber: false }] } }
+    expect(canMarkDelivered(dispatched)).toBe(true)
+    expect(canMarkDelivered(order)).toBe(false)
+    expect(canMarkDelivered({ ...dispatched, fulfilment: { ...dispatched.fulfilment, stage: 'DELIVERED' } })).toBe(false)
+    expect(canMarkDelivered({ ...dispatched, fulfilment: { ...dispatched.fulfilment, shipments: [] } })).toBe(false)
+    for (const status of ['COMPLETED', 'RETURNED', 'CANCELLED', 'CONFIRMED'] as const) expect(canMarkDelivered({ ...dispatched, status })).toBe(false)
   })
 })

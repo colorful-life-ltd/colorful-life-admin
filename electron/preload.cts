@@ -101,6 +101,7 @@ const adminOrders: AdminOrdersApi = {
   get: (id) => forwardIpcResult(ipcRenderer.invoke('admin-orders:get', id)),
   preparing: (id) => forwardIpcResult(ipcRenderer.invoke('admin-orders:preparing', id)),
   dispatch: (id, input) => forwardIpcResult(ipcRenderer.invoke('admin-orders:dispatch', id, input)),
+  delivered: (id) => forwardIpcResult(ipcRenderer.invoke('admin-orders:delivered', id)),
   cancel: (id, reason) => forwardIpcResult(ipcRenderer.invoke('admin-orders:cancel', id, reason)),
 }
 contextBridge.exposeInMainWorld('adminOrders', adminOrders)

@@ -46,7 +46,7 @@ describe('App authentication flow', () => {
   it('opens Returns and navigates to the exact original order and back through the real workspace', async()=>{
     window.adminAuth.restore=vi.fn().mockResolvedValue(adminSession)
     window.adminReturns={list:vi.fn().mockResolvedValue(returnQueue),get:vi.fn().mockResolvedValue(returnCase),action:vi.fn()}
-    window.adminOrders={list:vi.fn().mockResolvedValue(orderPage),get:vi.fn().mockResolvedValue(order),financials:vi.fn().mockResolvedValue(financials),paymentEnvironment:vi.fn().mockResolvedValue({stripeEnvironment:'TEST',refundReconciliationEnabled:true}),preparing:vi.fn(),dispatch:vi.fn(),cancel:vi.fn()}
+    window.adminOrders={list:vi.fn().mockResolvedValue(orderPage),get:vi.fn().mockResolvedValue(order),financials:vi.fn().mockResolvedValue(financials),paymentEnvironment:vi.fn().mockResolvedValue({stripeEnvironment:'TEST',refundReconciliationEnabled:true}),preparing:vi.fn(),dispatch:vi.fn(),delivered:vi.fn(),cancel:vi.fn()}
     window.adminConnection={status:vi.fn().mockResolvedValue({mode:'direct',state:'connected',message:'Direct connection'}),retry:vi.fn()}
     render(<App />)
     fireEvent.click(await screen.findByRole('button',{name:'Returns'}))
@@ -210,7 +210,7 @@ describe('App authentication flow', () => {
   })
 
   it('keeps Orders behind authentication and opens the order section for an Admin', async () => {
-    window.adminOrders = { financials: vi.fn(), paymentEnvironment: vi.fn().mockResolvedValue({stripeEnvironment:'TEST',refundReconciliationEnabled:true}), list: vi.fn().mockResolvedValue({ items: [], pagination: { page: 1, pageSize: 20, totalItems: 0, totalPages: 0 } }), get: vi.fn(), preparing: vi.fn(), dispatch: vi.fn(), cancel: vi.fn() }
+    window.adminOrders = { financials: vi.fn(), paymentEnvironment: vi.fn().mockResolvedValue({stripeEnvironment:'TEST',refundReconciliationEnabled:true}), list: vi.fn().mockResolvedValue({ items: [], pagination: { page: 1, pageSize: 20, totalItems: 0, totalPages: 0 } }), get: vi.fn(), preparing: vi.fn(), dispatch: vi.fn(), delivered: vi.fn(), cancel: vi.fn() }
     render(<App />)
     await screen.findByRole('button', { name: 'Sign in' })
     expect(screen.queryByRole('button', { name: 'Orders' })).not.toBeInTheDocument()

@@ -81,6 +81,14 @@ export function parseDetail(v: unknown): OrderDetail {
     if (!record(s) || !text(s.carrierName) || !nullableText(s.trackingNumber) || !date(s.dispatchedAt) || !nullableText(s.trackingUrl) || typeof s.trackingUrlIncludesNumber !== 'boolean' || !(s.carrier === null || Object.hasOwn(patterns, String(s.carrier)))) throw malformed()
     validateOrderId(s.sequence)
   }
+  if (v.deliveryConfirmations !== undefined) {
+    if (!Array.isArray(v.deliveryConfirmations)) throw malformed()
+    for (const d of v.deliveryConfirmations) {
+      const positive = (x: unknown) => Number.isSafeInteger(x) && (x as number) > 0
+      if (!record(d) || !positive(d.shipmentId) || !date(d.confirmedAt) || d.source !== 'MANUAL_OPERATOR_CONFIRMATION' || !(d.shipmentSequence === null || positive(d.shipmentSequence))
+        || !(d.performedByUser === null || (record(d.performedByUser) && positive(d.performedByUser.id) && nullableText(d.performedByUser.email)))) throw malformed()
+    }
+  }
   for (const e of v.fulfilmentEvents) {
     if (!record(e) || !text(e.action) || !stage(e.fromStage) || !stage(e.toStage) || !text(e.source) || !date(e.createdAt) || !record(e.performedByUser) || !text(e.performedByUser.email)) throw malformed()
     validateOrderId(e.id); validateOrderId(e.performedByUser.id)
@@ -94,7 +102,7 @@ export class OrderService implements AdminOrdersApi {
     const response = await this.auth.authenticatedFetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     if (!response.ok) {
       const error = await readBackendError(response, 'The order request could not be completed.')
-      const messages: Record<string, string> = { ORDER_ALREADY_PAID: 'Paid orders cannot be cancelled. No refund has been performed.', ORDER_PAYMENT_UNRESOLVED: 'This order has a payment attempt and cannot be cancelled.', ORDER_PAYMENT_NOT_VERIFIED: 'Payment is not eligible for fulfilment. The order has been refreshed.', FULFILMENT_TRANSITION_INVALID: 'The order state changed or this action is unavailable. The order has been refreshed.', ORDER_ALREADY_DISPATCHED: 'This order has already been dispatched. Shipment details cannot be overwritten.' }
+      const messages: Record<string, string> = { ORDER_ALREADY_PAID: 'Paid orders cannot be cancelled. No refund has been performed.', ORDER_PAYMENT_UNRESOLVED: 'This order has a payment attempt and cannot be cancelled.', ORDER_PAYMENT_NOT_VERIFIED: 'Payment is not eligible for fulfilment. The order has been refreshed.', FULFILMENT_TRANSITION_INVALID: 'The order state changed or this action is unavailable. The order has been refreshed.', ORDER_ALREADY_DISPATCHED: 'This order has already been dispatched. Shipment details cannot be overwritten.', ORDER_ALREADY_DELIVERED: 'This order has already been confirmed as delivered. The order has been refreshed.', DELIVERY_CONFIRMATION_REQUIRED: 'Confirm that you checked delivery on the carrier’s tracking website.' }
       const blockReasons: Record<string,string> = {
         CANCELLATION_PENDING: 'A paid cancellation request is active. Follow staged cancellation or withdraw the exact request before refund initiation.',
         INVENTORY_DISCREPANCY: 'Inventory discrepancy: inspect the listing and record a reasoned physical stocktake.',
@@ -142,5 +150,6 @@ export class OrderService implements AdminOrdersApi {
   async get(id: number) { return parseDetail(await this.request(`/admin/orders/${validateOrderId(id)}`)) }
   async preparing(id: number) { return parseDetail(await this.request(`/admin/orders/${validateOrderId(id)}/fulfilment/preparing`, {})) }
   async dispatch(id: number, input: DispatchInput) { return parseDetail(await this.request(`/admin/orders/${validateOrderId(id)}/fulfilment/dispatch`, validateDispatch(input))) }
+  async delivered(id: number) { return parseDetail(await this.request(`/admin/orders/${validateOrderId(id)}/fulfilment/delivered`, { verifiedOnCarrierWebsite: true })) }
   async cancel(id: number, reason: CancellationReason) { await this.request(`/orders/${validateOrderId(id)}/seller-cancel`, { reason: validateReason(reason) }) }
 }
