@@ -195,6 +195,16 @@ async function run() {
     await click('Confirm')
     await until("document.querySelector('dialog [role=alert]')?.textContent.includes('Use a full stop for pence')")
     assert.equal(requests.filter(r => r.path.endsWith('/fulfilment/dispatch')).length, 1)
+    // £15 approval: a real Escape on the approval modal must not confirm the shipment.
+    await type('order-cost', '15.01')
+    // A real mouse click (user activation), as an operator would make; scripted clicks are not activation.
+    const box = await js("(() => { const r = [...document.querySelectorAll('dialog button')].find(b => b.textContent === 'Confirm').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) } })()")
+    for (const type of ['mouseDown', 'mouseUp']) window.webContents.sendInputEvent({ type, x: box.x, y: box.y, button: 'left', clickCount: 1 })
+    await until("document.querySelector('.order-dialog').matches(':modal') && !!document.querySelector('.approval-step') && document.activeElement?.textContent === 'Cancel'")
+    assert.equal(requests.filter(r => r.path.endsWith('/fulfilment/dispatch')).length, 1)
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' }); window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+    await until("!document.querySelector('.approval-step') && document.querySelector('.order-dialog').open && document.activeElement?.id === 'order-cost' && document.querySelector('dialog [role=alert]')?.textContent.includes('needs your approval')")
+    assert.equal(requests.filter(r => r.path.endsWith('/fulfilment/dispatch')).length, 1)
     await type('order-cost', '3.99')
     await until("document.getElementById('order-cost-hint').textContent === 'Will be recorded as £3.99.'")
     expectedShippingCost = 3.99

@@ -49,6 +49,9 @@ export interface AdminOrdersApi {
   delivered(id: number): Promise<OrderDetail>
   cancel(id: number, reason: CancellationReason): Promise<void>
 }
+/** Shipping cost above £15.00 (1500 pence) needs explicit operator approval; exactly £15.00 does not. */
+export const SHIPPING_APPROVAL_THRESHOLD_PENCE = 1500
+export const requiresShippingApproval = (pence: number) => pence > SHIPPING_APPROVAL_THRESHOLD_PENCE
 export const canFulfil = (order: OrderSummary) => order.status === 'CONFIRMED' && order.payment?.status === 'SUCCEEDED' && !!order.payment.paidAt
 /** Manual delivery confirmation: dispatched, with a shipment record, and not already delivered. */
 export const canMarkDelivered = (order: OrderDetail) => order.status === 'DISPATCHED' && !!order.dispatchedAt && order.fulfilment.shipments.length > 0 && order.fulfilment.stage !== 'DELIVERED'
