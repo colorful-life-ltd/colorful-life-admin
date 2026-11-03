@@ -15,6 +15,7 @@ async function run() {
   app.setPath('userData', join(folder, 'profile'))
   const requests = []
   let securityReview = true
+  let expectedShippingCost = 3.5
   let financialMode = 'empty'
   let refundPosted = false
   let cancellationLost = false
@@ -78,15 +79,23 @@ async function run() {
       order.preparingAt = timestamp; order.fulfilmentStage = 'PREPARING'; order.fulfilment.stage = 'PREPARING'; order.fulfilment.preparingAt = timestamp
       data = order
     } else if (req.url === '/admin/orders/41/fulfilment/dispatch') {
-      assert.deepEqual(body, { carrier: 'ROYAL_MAIL', trackingNumber: 'AB123456789GB', actualShippingCost: 3.5 })
+      assert.deepEqual(body, { carrier: 'ROYAL_MAIL', trackingNumber: 'AB123456789GB', actualShippingCost: expectedShippingCost })
       if (securityReview) {
         res.statusCode = 409
         res.setHeader('Content-Type', 'application/json')
         res.end(JSON.stringify({ error: { code: 'ORDER_PAYMENT_NOT_VERIFIED', message: 'Order 41 payment is not verified for fulfilment (SECURITY_REVIEW_REQUIRED)' } }))
         return
       }
-      order.status = 'DISPATCHED'; order.fulfilmentStage = 'DISPATCHED'; order.fulfilment.stage = 'DISPATCHED'; order.dispatchedAt = timestamp
+      order.status = 'DISPATCHED'; order.fulfilmentStage = 'DISPATCHED'; order.fulfilment.stage = 'DISPATCHED'; order.dispatchedAt = timestamp; order.actualShippingCost = String(body.actualShippingCost)
       order.fulfilment.shipments = [{ sequence: 1, carrier: 'ROYAL_MAIL', carrierName: 'Royal Mail', trackingNumber: body.trackingNumber, dispatchedAt: timestamp, trackingUrl: 'https://www.royalmail.com/track-your-item#/tracking-results/AB123456789GB', trackingUrlIncludesNumber: true }]
+      data = order
+    } else if (req.url === '/admin/orders/41/fulfilment/delivered') {
+      assert.equal(req.method, 'POST'); assert.deepEqual(body, { verifiedOnCarrierWebsite: true })
+      if (order.fulfilment.stage === 'DELIVERED') { res.statusCode = 409; res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ error: { code: 'ORDER_ALREADY_DELIVERED', message: 'already' } })); return }
+      const deliveredAt = new Date().toISOString()
+      order.fulfilmentStage = 'DELIVERED'; order.fulfilment.stage = 'DELIVERED'
+      order.fulfilment.shipments[0].tracking = { progress: 'DELIVERED', deliveredAt, deliveryConfirmation: 'MANUAL' }
+      order.deliveryConfirmations = [{ shipmentId: 9, shipmentSequence: 1, confirmedAt: deliveredAt, source: 'MANUAL_OPERATOR_CONFIRMATION', performedByUser: { id: 1, email: 'runtime-operator@test.invalid' } }]
       data = order
     } else { res.statusCode = 404; data = { error: 'Unexpected fixture request' } }
     res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(data))
@@ -115,6 +124,12 @@ async function run() {
       const expression = `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(label)} && !b.disabled)`
       await until(expression)
       await js(`(${expression}).click()`)
+    }
+    // Real key events: a number field silently drops a typed comma, which is how 3,99 was recorded as 399.
+    const type = async (id, text) => {
+      await fill(id, ''); await js(`document.getElementById(${JSON.stringify(id)}).focus()`)
+      for (const keyCode of text) window.webContents.sendInputEvent({ type: 'char', keyCode })
+      await until(`document.getElementById(${JSON.stringify(id)}).value === ${JSON.stringify(text)}`)
     }
     const fill = async (id, value) => js(`(() => { const input = document.getElementById(${JSON.stringify(id)}); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)}); input.dispatchEvent(new Event('input', {bubbles:true})); })()`)
     assert.equal(await js('typeof window.require'), 'undefined')
@@ -176,9 +191,39 @@ async function run() {
     // Only the fixture simulates a separately resolved review; Admin has no release operation.
     securityReview = false
     await click('Confirm Shipment')
-    await fill('order-tracking', 'ab 123456789 gb'); await fill('order-cost', '3.5')
+    await fill('order-tracking', 'ab 123456789 gb'); await type('order-cost', '3,99')
+    await click('Confirm')
+    await until("document.querySelector('dialog [role=alert]')?.textContent.includes('Use a full stop for pence')")
+    assert.equal(requests.filter(r => r.path.endsWith('/fulfilment/dispatch')).length, 1)
+    // £15 approval: a real Escape on the approval modal must not confirm the shipment.
+    await type('order-cost', '15.01')
+    // A real mouse click (user activation), as an operator would make; scripted clicks are not activation.
+    const box = await js("(() => { const r = [...document.querySelectorAll('dialog button')].find(b => b.textContent === 'Confirm').getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) } })()")
+    for (const type of ['mouseDown', 'mouseUp']) window.webContents.sendInputEvent({ type, x: box.x, y: box.y, button: 'left', clickCount: 1 })
+    await until("document.querySelector('.order-dialog').matches(':modal') && !!document.querySelector('.approval-step') && document.activeElement?.textContent === 'Cancel'")
+    assert.equal(requests.filter(r => r.path.endsWith('/fulfilment/dispatch')).length, 1)
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' }); window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+    await until("!document.querySelector('.approval-step') && document.querySelector('.order-dialog').open && document.activeElement?.id === 'order-cost' && document.querySelector('dialog [role=alert]')?.textContent.includes('needs your approval')")
+    assert.equal(requests.filter(r => r.path.endsWith('/fulfilment/dispatch')).length, 1)
+    await type('order-cost', '3.99')
+    await until("document.getElementById('order-cost-hint').textContent === 'Will be recorded as £3.99.'")
+    expectedShippingCost = 3.99
     await click('Confirm')
     await until("document.body.textContent.includes('Track shipment 1')")
+    await until("document.body.textContent.includes('Actual shipping cost: £3.99')")
+    assert.equal(await js("document.body.textContent.includes('£399')"), false)
+    // Manual delivery: explicit carrier-website check, one authenticated request, refreshed order.
+    await click('Mark as Delivered')
+    await until("document.querySelector('dialog').matches(':modal') && document.querySelector('dialog').textContent.includes('carrier’s tracking website')")
+    assert.equal(await js("[...document.querySelectorAll('dialog button')].find(b => b.textContent === 'Confirm delivery').disabled"), true)
+    assert.equal(requests.some(r => r.path.endsWith('/fulfilment/delivered')), false)
+    await js("document.querySelector('dialog input[type=checkbox]').click()")
+    await js("(() => { const b = [...document.querySelectorAll('dialog button')].find(b => b.textContent === 'Confirm delivery'); b.click(); b.click() })()")
+    await until("document.body.textContent.includes('Delivery confirmed. The customer now sees this order as Delivered.')")
+    await until("document.body.textContent.includes('runtime-operator@test.invalid · Manual confirmation')")
+    assert.equal(await js("[...document.querySelectorAll('button')].some(b => b.textContent === 'Mark as Delivered')"), false)
+    const deliveredCalls = requests.filter(r => r.path.endsWith('/fulfilment/delivered'))
+    assert.equal(deliveredCalls.length, 1); assert.equal(deliveredCalls[0].auth, 'Bearer order-runtime-token')
     assert.equal(await js("[...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Cancel Order')"), false)
     assert.equal(requests.filter(r => r.path.endsWith('/fulfilment/dispatch')).length, 2)
     assert(requests.filter(r => r.path.startsWith('/admin/orders')).every(r => r.auth === 'Bearer order-runtime-token'))

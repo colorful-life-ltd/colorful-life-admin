@@ -5,9 +5,9 @@ import type { OrderFinancials } from '../electron/order-financials'
 import { safeTrackingUrl } from '../electron/tracking-url'
 import { useEffect, useRef, useState } from 'react'
 import { adminOrders } from './admin-api'
-import { canCancel, canFulfil, cancellationReasons } from '../electron/order-contract'
+import { canCancel, canFulfil, canMarkDelivered, cancellationReasons, requiresShippingApproval, SHIPPING_APPROVAL_THRESHOLD_PENCE } from '../electron/order-contract'
 import type { CancellationReason, Carrier, OrderDetail, OrderPage } from '../electron/order-contract'
-import { validateDispatch } from '../electron/order-service'
+import { parseShippingCostPence, validateDispatch } from '../electron/order-service'
 import { isAdminIpcError } from '../electron/ipc-error-contract'
 import './Orders.css'
 
@@ -15,12 +15,22 @@ const label = (v: string | null) => v ? v.toLowerCase().replaceAll('_', ' ').rep
 const date = (v: string) => new Date(v).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
 const money = (v: string, currency: string) => new Intl.NumberFormat('en-GB', { style: 'currency', currency }).format(Number(v))
 const message = (e: unknown) => e instanceof Error ? e.message : 'The order request failed. Please try again.'
+const stageTone = (stage: string | null) => stage === 'DELIVERED' ? 'done' : stage === 'DISPATCHED' || stage === 'IN_TRANSIT' ? 'active' : stage === 'PREPARING' || stage === 'CONFIRMED' ? 'todo' : 'muted'
+/** One sentence telling the operator what to do next, derived only from the order's reported state. */
+const nextStep = (o: OrderDetail, blocked: boolean) => {
+  if (blocked && canFulfil(o)) return 'Preparing and shipping are blocked: resolve the payment or refund warning under Payment and refunds below first.'
+  if (canFulfil(o)) return o.fulfilmentStage === 'CONFIRMED' ? 'Paid and ready. Mark as Preparing when you start packing, then Confirm Shipment with the carrier and tracking number.' : 'Being prepared. When the parcel is handed to the carrier, Confirm Shipment with the tracking number and actual cost.'
+  if (canMarkDelivered(o)) return 'Dispatched. When the carrier’s tracking website shows the parcel as delivered, Mark as Delivered.'
+  if (o.fulfilment.stage === 'DELIVERED') return 'Delivered. No further fulfilment action is needed.'
+  if (canCancel(o)) return 'Not paid yet. Wait for payment, or cancel the order if it cannot be fulfilled.'
+  return 'No fulfilment action is available for this order.'
+}
 
 const readFinancials = async (id: number): Promise<OrderFinancials> => {
   try { return await adminOrders.financials(id) }
   catch { return { payment: { state: 'error', message: 'Payment information could not be read. Refresh to retry.' }, refunds: { state: 'error', message: 'Refund history could not be read. Refresh to retry.' }, consistent: false } }
 }
-type Action = 'preparing' | 'dispatch' | 'cancel'
+type Action = 'preparing' | 'dispatch' | 'delivered' | 'cancel'
 export default function Orders({ sessionBlocked = false, initialOrderId = null, onViewReturns }: { sessionBlocked?: boolean; initialOrderId?:number|null;onViewReturns?:(id:number)=>void }) {
   const [page, setPage] = useState(1)
   const [result, setResult] = useState<OrderPage | null>(null)
@@ -38,6 +48,11 @@ export default function Orders({ sessionBlocked = false, initialOrderId = null, 
   const [tracking, setTracking] = useState('')
   const [cost, setCost] = useState('')
   const [reason, setReason] = useState<CancellationReason>('OUT_OF_STOCK')
+  const [deliveryChecked, setDeliveryChecked] = useState(false)
+  // Pence awaiting approval, and the exact pence amount the operator approved (reset when the cost changes).
+  const [approvalFor, setApprovalFor] = useState<number | null>(null)
+  const [approvedPence, setApprovedPence] = useState<number | null>(null)
+  const approvalCancel = useRef<HTMLButtonElement>(null)
   const inFlight = useRef(false)
   const generation = useRef(0)
   const dialog = useRef<HTMLDialogElement>(null)
@@ -65,13 +80,26 @@ export default function Orders({ sessionBlocked = false, initialOrderId = null, 
     if (action && !sessionBlocked) { priorFocus.current = document.activeElement as HTMLElement; dialog.current?.showModal() }
     else { if (dialog.current?.open) dialog.current.close(); if (priorFocus.current?.isConnected) priorFocus.current.focus() }
   }, [action, sessionBlocked])
+  // The approval is a step inside the shipment dialog: stacked modals share one Escape in Chromium.
+  useEffect(() => { if (approvalFor !== null) approvalCancel.current?.focus() }, [approvalFor])
+  const cancelApproval = () => {
+    setApprovalFor(null); setApprovedPence(null)
+    setError(`Shipment not confirmed. A shipping cost above ${money((SHIPPING_APPROVAL_THRESHOLD_PENCE / 100).toFixed(2), 'GBP')} needs your approval.`)
+    setTimeout(() => document.getElementById('order-cost')?.focus(), 0)
+  }
 
   const financePayment = financials?.payment.state === 'ready' ? financials.payment.value : undefined
   const summaryMismatch = order && financePayment !== undefined && (order.paymentStatus !== (financePayment?.status ?? null)
     || (order.payment !== null && (order.payment.currency !== financePayment?.currency || order.payment.paidAt !== financePayment?.paidAt)))
   const financialWarning = summaryMismatch ? 'Order and payment reads do not agree. Refresh before dispatching.' : dispatchFinancialWarning(financials)
-  const submit = async () => {
-    if (!order || !action || inFlight.current || sessionBlocked || (action !== 'cancel' && financialWarning)) return
+  const costPreview = (() => {
+    if (!cost.trim()) return 'What we paid the carrier, in pounds, for example 3.99.'
+    try { return `Will be recorded as ${money((parseShippingCostPence(cost) / 100).toFixed(2), 'GBP')}.` } catch (e) { return message(e) }
+  })()
+  const submit = async (approvedOverride?: number) => {
+    // Delivery is a physical fact; payment warnings block fulfilment, not recording that a parcel arrived.
+    if (!order || !action || inFlight.current || sessionBlocked || ((action === 'preparing' || action === 'dispatch') && financialWarning)) return
+    if (action === 'delivered' && !deliveryChecked) { setError('Confirm that you checked the carrier’s tracking website first.'); return }
     const current = generation.current
     const refresh = async () => {
       setFinancials(null)
@@ -81,18 +109,23 @@ export default function Orders({ sessionBlocked = false, initialOrderId = null, 
     let input
     try {
       if (action === 'dispatch') {
-        if (!cost.trim()) throw new Error('Enter the actual shipping cost.')
-        input = validateDispatch({ carrier, trackingNumber: tracking, actualShippingCost: Number(cost), ...(carrier === 'OTHER' ? { carrierName } : {}) })
+        // Integer pence from the exact typed text; pence / 100 serializes as the same two-decimal amount (399 -> 3.99).
+        const pence = parseShippingCostPence(cost)
+        input = validateDispatch({ carrier, trackingNumber: tracking, actualShippingCost: pence / 100, ...(carrier === 'OTHER' ? { carrierName } : {}) })
+        // Over £15.00: no request until this exact amount is explicitly approved.
+        if (requiresShippingApproval(pence) && (approvedOverride ?? approvedPence) !== pence) { setError(''); setApprovalFor(pence); return }
       }
     } catch (e) { setError(message(e)); return }
     inFlight.current = true; setPending(true); setError(''); setFeedback('')
     try {
       if (action === 'dispatch') await adminOrders.dispatch(order.id, input!)
       else if (action === 'preparing') await adminOrders.preparing(order.id)
+      else if (action === 'delivered') await adminOrders.delivered(order.id)
       else await adminOrders.cancel(order.id, reason)
       if (current !== generation.current) return
       setAction(null)
-      setFeedback(action === 'cancel' ? 'Order cancelled. No refund was performed.' : action === 'dispatch' ? 'Shipment confirmed.' : 'Order marked as Preparing.')
+      setApprovedPence(null)
+      setFeedback(action === 'cancel' ? 'Order cancelled. No refund was performed.' : action === 'dispatch' ? `Shipment confirmed.${input && requiresShippingApproval(Math.round(input.actualShippingCost * 100)) ? ` Shipping cost ${money(input.actualShippingCost.toFixed(2), 'GBP')} approved above the ${money((SHIPPING_APPROVAL_THRESHOLD_PENCE / 100).toFixed(2), 'GBP')} threshold.` : ''}` : action === 'delivered' ? 'Delivery confirmed. The customer now sees this order as Delivered.' : 'Order marked as Preparing.')
       try { await refresh() }
       catch (e) { setOrder(null); setError(`Action succeeded, but refreshing the order failed. ${message(e)}`) }
     } catch (e) {
@@ -122,33 +155,56 @@ export default function Orders({ sessionBlocked = false, initialOrderId = null, 
       <nav className="order-actions" aria-label="Order pages"><button className="button button-secondary" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Previous</button><span>Page {result.pagination.page} of {Math.max(1, result.pagination.totalPages)} · {result.pagination.totalItems} orders</span><button className="button button-secondary" disabled={page >= result.pagination.totalPages || page >= 10000} onClick={() => setPage(p => p + 1)}>Next</button></nav>
     </>}
     {!loading && order && <>
-      <button className="button button-primary" disabled={pending} onClick={()=>onViewReturns?.(order.id)}>View Returns</button>
       <p>{order.user.email} · Placed {date(order.createdAt)}</p>
-      <dl><dt>Order status</dt><dd>{label(order.status)}</dd><dt>Payment</dt><dd>{label(order.paymentStatus)}{order.payment?.paidAt && ` · ${date(order.payment.paidAt)}`}</dd><dt>Fulfilment</dt><dd>{label(order.fulfilmentStage)}</dd><dt>Total</dt><dd>{money(order.totalAmount, order.currency)} {order.currency}</dd></dl>
+      <dl><dt>Order status</dt><dd>{label(order.status)}</dd><dt>Payment</dt><dd>{label(order.paymentStatus)}{order.payment?.paidAt && ` · ${date(order.payment.paidAt)}`}</dd><dt>Fulfilment</dt><dd><span className={`status-pill status-pill--${stageTone(order.fulfilmentStage)}`}>{label(order.fulfilmentStage)}</span></dd><dt>Total</dt><dd>{money(order.totalAmount, order.currency)} {order.currency}</dd></dl>
+      {/* Next step first: the fulfilment actions used every day, with the reason when they are blocked. */}
+      <section className="next-step" aria-labelledby="next-step-title">
+        <h3 id="next-step-title">Next step</h3>
+        <p>{nextStep(order, !!financialWarning)}</p>
+        <div className="order-actions">
+          {canFulfil(order) && order.fulfilmentStage === 'CONFIRMED' && <button className="button button-primary" disabled={pending || !!financialWarning} onClick={() => { setError(''); setAction('preparing') }}>Mark as Preparing</button>}
+          {canFulfil(order) && <button className="button button-primary" disabled={pending || !!financialWarning} onClick={() => { setError(''); setAction('dispatch'); setTracking(''); setCost(''); setApprovedPence(null) }}>Confirm Shipment</button>}
+          {canMarkDelivered(order) && <button className="button button-primary" disabled={pending} onClick={() => { setError(''); setDeliveryChecked(false); setAction('delivered') }}>Mark as Delivered</button>}
+          {canCancel(order) && <button className="button button-secondary" disabled={pending} onClick={() => { setError(''); setAction('cancel') }}>Cancel Order</button>}
+        </div>
+        <button className="button button-secondary" disabled={pending} onClick={()=>onViewReturns?.(order.id)}>View Returns</button>
+      </section>
       <OrderFinancialDetails data={financials} warning={financialWarning} />
       <h3>Products</h3><ul>{order.orderItems.map(i => <li key={i.id}>{i.productListing.legoProduct.setNumber} · {i.productListing.legoProduct.title} · {label(i.productListing.condition)}<br />{i.quantity} × {money(i.unitPrice, order.currency)} = {money(i.lineTotal, order.currency)}</li>)}</ul>
       <h3>Shipping address</h3><address>{order.deliveryRecipientName}<br />{order.deliveryLine1}<br />{order.deliveryLine2 && <>{order.deliveryLine2}<br /></>}{order.deliveryCity}<br />{order.deliveryCounty && <>{order.deliveryCounty}<br /></>}{order.deliveryPostcode}<br />{order.deliveryCountryCode}{order.deliveryPhone && <><br />{order.deliveryPhone}</>}</address>
-      <h3>Shipment details</h3>{order.fulfilment.shipments.length ? order.fulfilment.shipments.map(s => <div key={s.sequence}><p>Shipment {s.sequence} · {s.carrierName} · {s.trackingNumber ?? 'No tracking number'}{s.tracking && ` · ${label(s.tracking.progress)}`}<br />Dispatched {date(s.dispatchedAt)}</p>{safeTrackingUrl(s.trackingUrl) && <a href={safeTrackingUrl(s.trackingUrl)!} target="_blank" rel="noopener noreferrer">Track shipment {s.sequence}</a>}{s.trackingUrl && !s.trackingUrlIncludesNumber && <p>Enter the displayed tracking number on the carrier’s website.</p>}</div>) : <p>No shipment recorded.</p>}
+      <h3>Shipment details</h3>{order.fulfilment.shipments.length ? order.fulfilment.shipments.map(s => <div key={s.sequence}><p>Shipment {s.sequence} · {s.carrierName} · {s.trackingNumber ?? 'No tracking number'}{s.tracking && ` · ${label(s.tracking.progress)}`}<br />Dispatched {date(s.dispatchedAt)}{s.tracking?.deliveredAt && ` · Delivered ${date(s.tracking.deliveredAt)}${s.tracking.deliveryConfirmation === 'MANUAL' ? ' (confirmed manually)' : ''}`}</p>{safeTrackingUrl(s.trackingUrl) && <a href={safeTrackingUrl(s.trackingUrl)!} target="_blank" rel="noopener noreferrer">Track shipment {s.sequence}</a>}{s.trackingUrl && !s.trackingUrlIncludesNumber && <p>Enter the displayed tracking number on the carrier’s website.</p>}</div>) : <p>No shipment recorded.</p>}
       {order.actualShippingCost !== null && <p>Actual shipping cost: {money(order.actualShippingCost, order.currency)}</p>}
-      <h3>Fulfilment history</h3>{order.fulfilmentEvents.length ? <ol>{order.fulfilmentEvents.map(e => <li key={e.id}>{label(e.action)} · {label(e.fromStage)} → {label(e.toStage)}<br />{date(e.createdAt)} · {e.performedByUser.email} · {label(e.source)}</li>)}</ol> : <p>No fulfilment history recorded.</p>}
+      <h3>Fulfilment history</h3>{order.fulfilmentEvents.length || order.deliveryConfirmations?.length ? <ol>{order.fulfilmentEvents.map(e => <li key={e.id}>{label(e.action)} · {label(e.fromStage)} → {label(e.toStage)}<br />{date(e.createdAt)} · {e.performedByUser.email} · {label(e.source)}</li>)}{order.deliveryConfirmations?.map(d => <li key={`delivered-${d.shipmentId}`}>Delivered · Dispatched → Delivered{d.shipmentSequence !== null && ` · Shipment ${d.shipmentSequence}`}<br />{date(d.confirmedAt)} · {d.performedByUser?.email ?? 'Unknown operator'} · Manual confirmation (carrier website checked)</li>)}</ol> : <p>No fulfilment history recorded.</p>}
       {window.adminOperations && <Operations key={order.id} orderId={order.id} sessionBlocked={pending} onViewReturns={onViewReturns} />}
-      <div className="order-actions">
-        {canFulfil(order) && order.fulfilmentStage === 'CONFIRMED' && <button className="button button-primary" disabled={pending || !!financialWarning} onClick={() => { setError(''); setAction('preparing') }}>Mark as Preparing</button>}
-        {canFulfil(order) && <button className="button button-primary" disabled={pending || !!financialWarning} onClick={() => { setError(''); setAction('dispatch'); setTracking(''); setCost('') }}>Confirm Shipment</button>}
-        {canCancel(order) && <button className="button button-secondary" disabled={pending} onClick={() => { setError(''); setAction('cancel') }}>Cancel Order</button>}
-      </div>
       {order.payment !== null && <p>Paid cancellation and refund controls are available below in Operator workflows.</p>}
     </>}
-    <dialog ref={dialog} className="order-dialog" aria-labelledby="order-confirm-title" onCancel={e => { if (pending) e.preventDefault(); else setAction(null) }}>
-      <form onSubmit={e => { e.preventDefault(); void submit() }}>
-        <h3 id="order-confirm-title">{action === 'dispatch' ? 'Confirm Shipment' : action === 'cancel' ? 'Cancel Order' : 'Mark as Preparing'}</h3>
-        <p>{action === 'cancel' ? 'Confirm cancellation of this order. This action does not refund a payment.' : action === 'dispatch' ? 'Confirm that this order has been shipped. Shipment details cannot be overwritten.' : 'Confirm that preparation of this order has started.'}</p>
+    <dialog ref={dialog} className="order-dialog" aria-labelledby={approvalFor !== null ? 'shipping-approval-title' : 'order-confirm-title'} aria-describedby={approvalFor !== null ? 'shipping-approval-text' : undefined}
+      onCancel={e => { if (pending || approvalFor !== null) { e.preventDefault(); if (!pending && approvalFor !== null) cancelApproval() } else setAction(null) }}
+      // Without user activation Chromium may close despite preventDefault; keep state in step so the dialog can reopen.
+      onClose={() => { if (action) { setAction(null); setApprovalFor(null) } }}>
+      {approvalFor !== null && <div className="approval-step">
+        <h3 id="shipping-approval-title">Approve shipping cost</h3>
+        <div id="shipping-approval-text">
+          <p>This shipping cost is above the approval threshold, so it needs your explicit approval before the shipment is confirmed.</p>
+          <dl><dt>Actual shipping cost</dt><dd><strong>{money((approvalFor / 100).toFixed(2), 'GBP')}</strong></dd><dt>Approval threshold</dt><dd>{money((SHIPPING_APPROVAL_THRESHOLD_PENCE / 100).toFixed(2), 'GBP')}</dd></dl>
+          <p>Check the amount you paid the carrier. Cancel to correct it; nothing is recorded until you approve.</p>
+        </div>
+        <div className="order-actions">
+          <button ref={approvalCancel} className="button button-secondary" type="button" disabled={pending} onClick={cancelApproval}>Cancel</button>
+          <button className="button button-primary" type="button" disabled={pending} onClick={() => { const pence = approvalFor; setApprovedPence(pence); setApprovalFor(null); void submit(pence) }}>Approve and confirm shipment</button>
+        </div>
+      </div>}
+      <form hidden={approvalFor !== null} onSubmit={e => { e.preventDefault(); void submit() }}>
+        <h3 id="order-confirm-title">{action === 'dispatch' ? 'Confirm Shipment' : action === 'cancel' ? 'Cancel Order' : action === 'delivered' ? 'Mark as Delivered' : 'Mark as Preparing'}</h3>
+        <p>{action === 'cancel' ? 'Confirm cancellation of this order. This action does not refund a payment.' : action === 'dispatch' ? 'Confirm that this order has been shipped. Shipment details cannot be overwritten.' : action === 'delivered' ? 'Before confirming, open the carrier’s tracking website and check that it shows this parcel as delivered. We do not check with the carrier automatically. Your account and the time are recorded, the customer will see the order as Delivered, and this cannot be undone.' : 'Confirm that preparation of this order has started.'}</p>
+        {action === 'delivered' && order && <ul className="delivery-check">{order.fulfilment.shipments.map(s => <li key={s.sequence}>Shipment {s.sequence} · {s.carrierName} · {s.trackingNumber ?? 'No tracking number'}{safeTrackingUrl(s.trackingUrl) && <> · <a href={safeTrackingUrl(s.trackingUrl)!} target="_blank" rel="noopener noreferrer">Open carrier tracking</a></>}</li>)}</ul>}
         <fieldset disabled={pending}>
-          {action === 'dispatch' && <><label htmlFor="order-carrier">Carrier</label><select id="order-carrier" value={carrier} onChange={e => setCarrier(e.target.value as Carrier)}>{(['ROYAL_MAIL', 'EVRI', 'DPD', 'OTHER'] as const).map(c => <option key={c} value={c}>{label(c)}</option>)}</select>{carrier === 'OTHER' && <><label htmlFor="order-carrier-name">Carrier name</label><input id="order-carrier-name" required maxLength={100} value={carrierName} onChange={e => setCarrierName(e.target.value)} /></>}<label htmlFor="order-tracking">Tracking number</label><input id="order-tracking" required maxLength={100} value={tracking} onChange={e => setTracking(e.target.value)} /><label htmlFor="order-cost">Actual shipping cost</label><input id="order-cost" type="number" min="0" max="100000" step="any" required value={cost} onChange={e => setCost(e.target.value)} /></>}
+          {action === 'dispatch' && <><label htmlFor="order-carrier">Carrier</label><select id="order-carrier" value={carrier} onChange={e => setCarrier(e.target.value as Carrier)}>{(['ROYAL_MAIL', 'EVRI', 'DPD', 'OTHER'] as const).map(c => <option key={c} value={c}>{label(c)}</option>)}</select>{carrier === 'OTHER' && <><label htmlFor="order-carrier-name">Carrier name</label><input id="order-carrier-name" required maxLength={100} value={carrierName} onChange={e => setCarrierName(e.target.value)} /></>}<label htmlFor="order-tracking">Tracking number</label><input id="order-tracking" required maxLength={100} value={tracking} onChange={e => setTracking(e.target.value)} /><label htmlFor="order-cost">Actual shipping cost</label><input id="order-cost" type="text" inputMode="decimal" autoComplete="off" required aria-describedby="order-cost-hint" value={cost} onChange={e => { setCost(e.target.value); setApprovedPence(null) }} /><p id="order-cost-hint" className="field-hint">{costPreview}</p></>}
+          {action === 'delivered' && <label className="checkbox-label"><input type="checkbox" checked={deliveryChecked} onChange={e => setDeliveryChecked(e.target.checked)} /> I checked the carrier’s tracking website and it shows this parcel as delivered.</label>}
           {action === 'cancel' && <><label htmlFor="order-reason">Cancellation reason</label><select id="order-reason" value={reason} onChange={e => setReason(e.target.value as CancellationReason)}>{cancellationReasons.map(r => <option key={r} value={r}>{label(r)}</option>)}</select></>}
         </fieldset>
         {error && <p className="error-message" role="alert">{error}</p>}
-        <div className="order-actions"><button className="button button-secondary" type="button" disabled={pending} onClick={() => { setAction(null); setError('') }}>Go back</button><button className="button button-primary" type="submit" disabled={pending} aria-busy={pending}>{pending ? 'Submitting…' : 'Confirm'}</button></div>
+        <div className="order-actions"><button className="button button-secondary" type="button" disabled={pending} onClick={() => { setAction(null); setError('') }}>Go back</button><button className="button button-primary" type="submit" disabled={pending || (action === 'delivered' && !deliveryChecked)} aria-busy={pending}>{pending ? 'Submitting…' : action === 'delivered' ? 'Confirm delivery' : 'Confirm'}</button></div>
       </form>
     </dialog>
   </section>

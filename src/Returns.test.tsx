@@ -28,6 +28,7 @@ const setup = (detail = returnCase) => {
     get: vi.fn().mockResolvedValue(order),
     preparing: vi.fn(),
     dispatch: vi.fn(),
+    delivered: vi.fn(),
     cancel: vi.fn(),
   }
   window.adminConnection = { status: vi.fn().mockResolvedValue({ mode: 'remote-sandbox', state: 'connected', message: 'Connected' }), retry: vi.fn() }

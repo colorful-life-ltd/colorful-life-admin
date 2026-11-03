@@ -8,9 +8,9 @@ import { adminOrders } from './admin-api'
 import type { AdminOrdersApi } from '../electron/order-contract'
 it('validates every order IPC operation before forwarding to the authenticated service', async () => {
   const handlers = new Map<string, OrderIpcHandler>()
-  const service = { financials: vi.fn(), paymentEnvironment: vi.fn(), list: vi.fn(), get: vi.fn(), preparing: vi.fn(), dispatch: vi.fn(), cancel: vi.fn() }
+  const service = { financials: vi.fn(), paymentEnvironment: vi.fn(), list: vi.fn(), get: vi.fn(), preparing: vi.fn(), dispatch: vi.fn(), delivered: vi.fn(), cancel: vi.fn() }
   registerOrderIpc((name, handler) => handlers.set(name, handler), service)
-  expect(handlers.size).toBe(7)
+  expect(handlers.size).toBe(8)
   handlers.get('admin-orders:list')!({}, 2, 20)
   expect(service.list).toHaveBeenCalledWith(2, 20)
   handlers.get('admin-orders:get')!({}, 41); handlers.get('admin-orders:preparing')!({}, 41)
@@ -21,6 +21,10 @@ it('validates every order IPC operation before forwarding to the authenticated s
   expect(service.get).toHaveBeenCalledWith(41); expect(service.preparing).toHaveBeenCalledWith(41)
   handlers.get('admin-orders:dispatch')!({}, 41, { carrier: 'ROYAL_MAIL', trackingNumber: 'ab 123456789 gb', actualShippingCost: 0 })
   expect(service.dispatch).toHaveBeenCalledWith(41, { carrier: 'ROYAL_MAIL', trackingNumber: 'AB123456789GB', actualShippingCost: 0 })
+  handlers.get('admin-orders:delivered')!({}, 41)
+  expect(service.delivered).toHaveBeenCalledWith(41)
+  for (const id of [0, -1, 1.5, '41', null]) expect(() => handlers.get('admin-orders:delivered')!({}, id)).toThrow()
+  expect(service.delivered).toHaveBeenCalledOnce()
   handlers.get('admin-orders:cancel')!({}, 41, 'OTHER')
   expect(service.cancel).toHaveBeenCalledWith(41, 'OTHER')
   for (const name of ['financials', 'get', 'preparing', 'dispatch', 'cancel']) expect(() => handlers.get(`admin-orders:${name}`)!({}, '41')).toThrow()
@@ -41,7 +45,7 @@ it('rejects spoofed senders and child frames before the financial read handler',
   const window = { webContents: contents, isDestroyed: () => false } as unknown as BrowserWindow
   const financials = vi.fn().mockResolvedValue({ ready: true })
   const handlers = new Map<string, ReturnType<typeof secureIpcHandler>>()
-  registerOrderIpc((name, handler) => handlers.set(name, secureIpcHandler(() => window, frame.url, handler)), { list: vi.fn(), get: vi.fn(), preparing: vi.fn(), dispatch: vi.fn(), cancel: vi.fn(), financials, paymentEnvironment: vi.fn() })
+  registerOrderIpc((name, handler) => handlers.set(name, secureIpcHandler(() => window, frame.url, handler)), { list: vi.fn(), get: vi.fn(), preparing: vi.fn(), dispatch: vi.fn(), delivered: vi.fn(), cancel: vi.fn(), financials, paymentEnvironment: vi.fn() })
   const handler = handlers.get('admin-orders:financials')!
   for (const event of [
     { sender: contents, senderFrame: null },

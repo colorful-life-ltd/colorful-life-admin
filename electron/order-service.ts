@@ -28,14 +28,34 @@ export function validatePage(v: unknown, max: number): number {
   if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > max) throw new OrderError('validation', 'Invalid order pagination.')
   return v
 }
-const patterns: Record<Carrier, RegExp> = { ROYAL_MAIL: /^[A-Z]{2}\d{9}GB$/, EVRI: /^[A-Z0-9]{16}$/, DPD: /^\d{14}$/, OTHER: /^[A-Z0-9]{6,40}$/ }
+/** Backend DispatchShipmentSchema maximum (£100,000.00), in pence. */
+export const MAX_SHIPPING_COST_PENCE = 10_000_000
+/**
+ * Parse the operator's typed GBP amount into integer pence without floating-point arithmetic.
+ * A comma is rejected rather than ignored: a number field silently drops it, turning 3,99 into 399.
+ */
+export function parseShippingCostPence(value: unknown): number {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!raw) throw new OrderError('validation', 'Enter the actual shipping cost.')
+  if (raw.includes(',')) throw new OrderError('validation', 'Use a full stop for pence, for example 3.99. Commas are not accepted.')
+  if (raw.startsWith('-')) throw new OrderError('validation', 'Shipping cost cannot be negative.')
+  const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(raw)
+  if (!match) throw new OrderError('validation', 'Enter the shipping cost in pounds with up to two decimal places, for example 3.99.')
+  const pence = Number(match[1]) * 100 + Number((match[2] ?? '').padEnd(2, '0'))
+  if (pence > MAX_SHIPPING_COST_PENCE) throw new OrderError('validation', 'Shipping cost cannot exceed £100,000.00.')
+  return pence
+}
+/** Whole pence for a validated pounds amount (3.99 -> 399). */
+export const shippingCostPence = (pounds: number) => Math.round(pounds * 100)
+const wholePence = (v: number) => shippingCostPence(v) / 100 === v
+const patterns: Record<Carrier, RegExp> ={ ROYAL_MAIL: /^[A-Z]{2}\d{9}GB$/, EVRI: /^[A-Z0-9]{16}$/, DPD: /^\d{14}$/, OTHER: /^[A-Z0-9]{6,40}$/ }
 export function validateDispatch(v: unknown): DispatchInput {
   if (!record(v) || Object.keys(v).some(k => !['carrier', 'carrierName', 'trackingNumber', 'actualShippingCost'].includes(k)) || !Object.hasOwn(patterns, String(v.carrier))) throw new OrderError('validation', 'Choose a supported carrier.')
   const carrier = v.carrier as Carrier
   if (!text(v.trackingNumber) || v.trackingNumber.length > 100) throw new OrderError('validation', 'Enter a valid tracking number.')
   const trackingNumber = v.trackingNumber.trim().replace(/[\s-]+/g, '').toUpperCase()
   if (!patterns[carrier].test(trackingNumber)) throw new OrderError('validation', 'Enter a valid tracking number for the selected carrier.')
-  if (typeof v.actualShippingCost !== 'number' || !Number.isFinite(v.actualShippingCost) || v.actualShippingCost < 0 || v.actualShippingCost > 100000) throw new OrderError('validation', 'Shipping cost must be between 0 and 100000.')
+  if (typeof v.actualShippingCost !== 'number' || !Number.isFinite(v.actualShippingCost) || v.actualShippingCost < 0 || v.actualShippingCost > 100000 || !wholePence(v.actualShippingCost)) throw new OrderError('validation', 'Shipping cost must be between £0.00 and £100,000.00 in whole pence.')
   if (carrier === 'OTHER' ? !text(v.carrierName) || !v.carrierName.trim() || v.carrierName.trim().length > 100 : v.carrierName !== undefined) throw new OrderError('validation', 'Provide a carrier name only when choosing Other (up to 100 characters).')
   return { carrier, trackingNumber, actualShippingCost: v.actualShippingCost, ...(carrier === 'OTHER' ? { carrierName: (v.carrierName as string).trim() } : {}) }
 }
@@ -61,6 +81,14 @@ export function parseDetail(v: unknown): OrderDetail {
     if (!record(s) || !text(s.carrierName) || !nullableText(s.trackingNumber) || !date(s.dispatchedAt) || !nullableText(s.trackingUrl) || typeof s.trackingUrlIncludesNumber !== 'boolean' || !(s.carrier === null || Object.hasOwn(patterns, String(s.carrier)))) throw malformed()
     validateOrderId(s.sequence)
   }
+  if (v.deliveryConfirmations !== undefined) {
+    if (!Array.isArray(v.deliveryConfirmations)) throw malformed()
+    for (const d of v.deliveryConfirmations) {
+      const positive = (x: unknown) => Number.isSafeInteger(x) && (x as number) > 0
+      if (!record(d) || !positive(d.shipmentId) || !date(d.confirmedAt) || d.source !== 'MANUAL_OPERATOR_CONFIRMATION' || !(d.shipmentSequence === null || positive(d.shipmentSequence))
+        || !(d.performedByUser === null || (record(d.performedByUser) && positive(d.performedByUser.id) && nullableText(d.performedByUser.email)))) throw malformed()
+    }
+  }
   for (const e of v.fulfilmentEvents) {
     if (!record(e) || !text(e.action) || !stage(e.fromStage) || !stage(e.toStage) || !text(e.source) || !date(e.createdAt) || !record(e.performedByUser) || !text(e.performedByUser.email)) throw malformed()
     validateOrderId(e.id); validateOrderId(e.performedByUser.id)
@@ -74,7 +102,7 @@ export class OrderService implements AdminOrdersApi {
     const response = await this.auth.authenticatedFetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     if (!response.ok) {
       const error = await readBackendError(response, 'The order request could not be completed.')
-      const messages: Record<string, string> = { ORDER_ALREADY_PAID: 'Paid orders cannot be cancelled. No refund has been performed.', ORDER_PAYMENT_UNRESOLVED: 'This order has a payment attempt and cannot be cancelled.', ORDER_PAYMENT_NOT_VERIFIED: 'Payment is not eligible for fulfilment. The order has been refreshed.', FULFILMENT_TRANSITION_INVALID: 'The order state changed or this action is unavailable. The order has been refreshed.', ORDER_ALREADY_DISPATCHED: 'This order has already been dispatched. Shipment details cannot be overwritten.' }
+      const messages: Record<string, string> = { ORDER_ALREADY_PAID: 'Paid orders cannot be cancelled. No refund has been performed.', ORDER_PAYMENT_UNRESOLVED: 'This order has a payment attempt and cannot be cancelled.', ORDER_PAYMENT_NOT_VERIFIED: 'Payment is not eligible for fulfilment. The order has been refreshed.', FULFILMENT_TRANSITION_INVALID: 'The order state changed or this action is unavailable. The order has been refreshed.', ORDER_ALREADY_DISPATCHED: 'This order has already been dispatched. Shipment details cannot be overwritten.', ORDER_ALREADY_DELIVERED: 'This order has already been confirmed as delivered. The order has been refreshed.', DELIVERY_CONFIRMATION_REQUIRED: 'Confirm that you checked delivery on the carrier’s tracking website.' }
       const blockReasons: Record<string,string> = {
         CANCELLATION_PENDING: 'A paid cancellation request is active. Follow staged cancellation or withdraw the exact request before refund initiation.',
         INVENTORY_DISCREPANCY: 'Inventory discrepancy: inspect the listing and record a reasoned physical stocktake.',
@@ -122,5 +150,6 @@ export class OrderService implements AdminOrdersApi {
   async get(id: number) { return parseDetail(await this.request(`/admin/orders/${validateOrderId(id)}`)) }
   async preparing(id: number) { return parseDetail(await this.request(`/admin/orders/${validateOrderId(id)}/fulfilment/preparing`, {})) }
   async dispatch(id: number, input: DispatchInput) { return parseDetail(await this.request(`/admin/orders/${validateOrderId(id)}/fulfilment/dispatch`, validateDispatch(input))) }
+  async delivered(id: number) { return parseDetail(await this.request(`/admin/orders/${validateOrderId(id)}/fulfilment/delivered`, { verifiedOnCarrierWebsite: true })) }
   async cancel(id: number, reason: CancellationReason) { await this.request(`/orders/${validateOrderId(id)}/seller-cancel`, { reason: validateReason(reason) }) }
 }

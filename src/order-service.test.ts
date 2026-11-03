@@ -1,8 +1,8 @@
 import { AuthService } from '../electron/auth-service'
 import { describe, expect, it, vi } from 'vitest'
-import { OrderService, validateDispatch } from '../electron/order-service'
+import { OrderService, parseShippingCostPence, shippingCostPence, validateDispatch } from '../electron/order-service'
 import { order, orderPage } from './test-fixtures/order'
-import { canCancel, canFulfil } from '../electron/order-contract'
+import { canCancel, canFulfil, canMarkDelivered } from '../electron/order-contract'
 import { safeTrackingUrl } from '../electron/tracking-url'
 const input = { carrier: 'ROYAL_MAIL' as const, trackingNumber: 'ab 123-456789 gb', actualShippingCost: 3.5 }
 const response = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } })
@@ -101,4 +101,75 @@ it.each(['IN_TRANSIT','DELIVERED'])('accepts Backend delivery progress %s withou
 it.each(['CANCELLATION_PENDING','INVENTORY_DISCREPANCY','PROVIDER_DISPUTE_REVIEW_REQUIRED','PROVIDER_REVERSAL_REVIEW_REQUIRED','PAYMENT_UNRESOLVED','PAYMENT_AMOUNT_MISMATCH','REFUND_IN_PROGRESS','FULLY_REFUNDED'])('preserves structured fulfilment reason %s',async reason=>{
  const fetch=vi.fn().mockResolvedValue(response({error:{code:'ORDER_PAYMENT_NOT_VERIFIED',message:'Cannot fulfil order',reason}},409))
  await expect(new OrderService({authenticatedFetch:fetch}).preparing(41)).rejects.toMatchObject({backendCode:reason,status:409})
+})
+
+describe('actual shipping cost precision (Order #10: 3.99 recorded as 399)', () => {
+  it.each([['3.99', 399], ['15.00', 1500], ['15.01', 1501], ['15', 1500], ['0', 0], [' 3.5 ', 350], ['100000.00', 10_000_000]])('parses %s as %i pence', (typed, pence) => {
+    expect(parseShippingCostPence(typed)).toBe(pence)
+  })
+  it.each([
+    ['', 'Enter the actual shipping cost'], ['   ', 'Enter the actual shipping cost'],
+    ['3,99', 'full stop'], ['1,500.00', 'full stop'], ['-1', 'negative'], ['-0.01', 'negative'],
+    ['abc', 'two decimal places'], ['3.999', 'two decimal places'], ['1e3', 'two decimal places'], ['£3.99', 'two decimal places'],
+    ['3.', 'two decimal places'], ['.99', 'two decimal places'], ['Infinity', 'two decimal places'], ['0x10', 'two decimal places'],
+    ['100000.01', 'cannot exceed'], ['9999999', 'cannot exceed'], ['1'.repeat(400), 'cannot exceed'],
+  ])('rejects %j instead of recording a different amount', (typed, text) => {
+    expect(() => parseShippingCostPence(typed)).toThrow(text)
+  })
+  it('rejects non-string input', () => { for (const v of [3.99, null, undefined, {}]) expect(() => parseShippingCostPence(v)).toThrow() })
+  it('accepts whole-pence amounts and rejects sub-pence or out-of-range amounts at the IPC boundary', () => {
+    for (const cost of [3.99, 15, 15.01, 0, 100000]) expect(validateDispatch({ ...input, actualShippingCost: cost }).actualShippingCost).toBe(cost)
+    for (const cost of [3.999, 0.001, -0.01, 100000.01, Infinity, NaN]) expect(() => validateDispatch({ ...input, actualShippingCost: cost })).toThrow('whole pence')
+  })
+  it.each([['3.99', '3.99'], ['15.00', '15'], ['15.01', '15.01']])('serializes %s to the Backend unchanged and keeps the recorded response amount', async (typed, recorded) => {
+    const fetch = vi.fn().mockResolvedValue(response({ ...order, status: 'DISPATCHED', actualShippingCost: recorded }))
+    const api = new OrderService({ authenticatedFetch: fetch })
+    const result = await api.dispatch(41, { ...input, actualShippingCost: parseShippingCostPence(typed) / 100 })
+    const body = JSON.parse(fetch.mock.calls[0][1].body)
+    expect(body.actualShippingCost).toBe(Number(recorded))
+    expect(fetch.mock.calls[0][1].body).toContain(`"actualShippingCost":${recorded}`)
+    expect(shippingCostPence(body.actualShippingCost)).toBe(parseShippingCostPence(typed))
+    expect(result.actualShippingCost).toBe(recorded)
+  })
+})
+
+describe('manual delivery confirmation', () => {
+  const delivered = { ...order, status: 'DISPATCHED', deliveryConfirmations: [{ shipmentId: 9, shipmentSequence: 1, confirmedAt: '2026-10-16T09:30:00.000Z', source: 'MANUAL_OPERATOR_CONFIRMATION', performedByUser: { id: 1, email: 'operator@example.com' } }] }
+  it('posts the explicit manual verification to the authenticated delivered endpoint', async () => {
+    const fetch = vi.fn().mockResolvedValue(response(delivered))
+    const result = await new OrderService({ authenticatedFetch: fetch }).delivered(41)
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch.mock.calls[0][0]).toBe('/admin/orders/41/fulfilment/delivered')
+    expect(fetch.mock.calls[0][1]).toMatchObject({ method: 'POST' })
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ verifiedOnCarrierWebsite: true })
+    expect(result.deliveryConfirmations?.[0].performedByUser?.email).toBe('operator@example.com')
+  })
+  it.each([
+    ['ORDER_ALREADY_DELIVERED', 409, 'already been confirmed as delivered'],
+    ['FULFILMENT_TRANSITION_INVALID', 409, 'state changed'],
+    ['FORBIDDEN', 403, ''],
+  ])('explains a rejected confirmation (%s)', async (code, status, text) => {
+    const fetch = vi.fn().mockResolvedValue(response({ error: { code, message: 'rejected' } }, status))
+    await expect(new OrderService({ authenticatedFetch: fetch }).delivered(41)).rejects.toMatchObject({ status, ...(text ? { message: expect.stringContaining(text) } : {}) })
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+  it('validates the order id before any request and rejects malformed delivery records', async () => {
+    const fetch = vi.fn(); const api = new OrderService({ authenticatedFetch: fetch })
+    for (const id of [0, -1, 1.5, NaN]) await expect(api.delivered(id)).rejects.toThrow()
+    expect(fetch).not.toHaveBeenCalled()
+    for (const bad of [{ confirmedAt: 'never' }, { source: 'CARRIER' }, { shipmentId: 0 }, { performedByUser: { id: 'x', email: null } }, { shipmentSequence: 'one' }]) {
+      const value = { ...delivered, deliveryConfirmations: [{ ...delivered.deliveryConfirmations[0], ...bad }] }
+      await expect(new OrderService({ authenticatedFetch: vi.fn().mockResolvedValue(response(value)) }).get(41)).rejects.toMatchObject({ code: 'malformed-response' })
+    }
+    await expect(new OrderService({ authenticatedFetch: vi.fn().mockResolvedValue(response({ ...delivered, deliveryConfirmations: {} })) }).get(41)).rejects.toMatchObject({ code: 'malformed-response' })
+    expect((await new OrderService({ authenticatedFetch: vi.fn().mockResolvedValue(response(order)) }).get(41)).deliveryConfirmations).toBeUndefined()
+  })
+  it('gates the action to dispatched, undelivered shipments', () => {
+    const dispatched = { ...order, status: 'DISPATCHED' as const, dispatchedAt: '2026-10-14T10:00:00Z', fulfilment: { ...order.fulfilment, stage: 'DISPATCHED' as const, shipments: [{ sequence: 1, carrier: 'ROYAL_MAIL' as const, carrierName: 'Royal Mail', trackingNumber: 'AB123456789GB', dispatchedAt: '2026-10-14T10:00:00Z', trackingUrl: null, trackingUrlIncludesNumber: false }] } }
+    expect(canMarkDelivered(dispatched)).toBe(true)
+    expect(canMarkDelivered(order)).toBe(false)
+    expect(canMarkDelivered({ ...dispatched, fulfilment: { ...dispatched.fulfilment, stage: 'DELIVERED' } })).toBe(false)
+    expect(canMarkDelivered({ ...dispatched, fulfilment: { ...dispatched.fulfilment, shipments: [] } })).toBe(false)
+    for (const status of ['COMPLETED', 'RETURNED', 'CANCELLED', 'CONFIRMED'] as const) expect(canMarkDelivered({ ...dispatched, status })).toBe(false)
+  })
 })
