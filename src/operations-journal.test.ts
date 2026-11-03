@@ -83,13 +83,12 @@ it('retains an uncertain refund across service restart and retries with its orig
   await restarted.execute('refund', refund)
   expect(f.authenticatedFetch.mock.calls.at(-1)![1].headers['Idempotency-Key']).toBe(original)
 })
-it('rechecks a previously confirmed refund through Backend idempotency using its original key', async () => {
+it('never resubmits a previously confirmed refund; its key and confirmed state are unchanged and no request is sent', async () => {
   const confirmed: SavedOperation = { operation: 'refund', input: refund, key: '12345678-1234-1234-1234-123456789abc', state: 'confirmed' }
   const f = fixture({ version: 2, intents: [confirmed] })
-  f.authenticatedFetch.mockResolvedValueOnce(json({ refundId: 13, status: 'PROCESSING', amount: '5.00', currency: 'GBP', provider: 'STRIPE' }, 202))
-  await f.service.execute('refund', refund)
-  expect(f.authenticatedFetch.mock.calls[0][1].headers['Idempotency-Key']).toBe(confirmed.key)
-  expect(await f.service.pending()).toMatchObject([{ state: 'confirmed', key: confirmed.key }])
+  await expect(f.service.execute('refund', refund)).rejects.toThrow('a confirmed refund is never submitted again')
+  expect(f.authenticatedFetch).not.toHaveBeenCalled()
+  expect(await f.service.pending()).toEqual([confirmed])
 })
 it('migrates a version 1 single-intent journal without dropping its uncertainty', async () => {
   const legacy: SavedOperation = { operation: 'securityReview', input: security, key: '5b2c3a4e-1111-4222-8333-944455556666', state: 'uncertain' }

@@ -2,13 +2,31 @@ import { financialHundredths } from '../electron/order-financials'
 import type { OrderDetail } from '../electron/order-contract'
 import type { ReturnCaseView } from '../electron/return-contract'
 
+export type ConnectionMode = 'direct' | 'remote-sandbox'
+
 /**
- * Trust the explicit Admin connection-mode report; do not infer it from a URL.
- * Direct mode remains valid for owner-approved environments. A known remote Sandbox
- * paired with LIVE Stripe is contradictory and must fail closed.
+ * Accept only an exact Admin connection-mode report; anything missing or malformed is
+ * unverified (null). Never infer the mode from a URL and never default to a permissive mode.
  */
-export function stripeEnvironmentMismatch(environment: 'TEST' | 'LIVE' | 'UNKNOWN', connectionMode: 'direct' | 'remote-sandbox' | null): boolean {
-  return connectionMode === 'remote-sandbox' && environment === 'LIVE'
+export function parseConnectionMode(status: unknown): ConnectionMode | null {
+  if (!status || typeof status !== 'object' || Array.isArray(status)) return null
+  const mode = (status as Record<string, unknown>).mode
+  return mode === 'direct' || mode === 'remote-sandbox' ? mode : null
+}
+
+/**
+ * A LIVE (real-money) refund requires an explicitly verified direct Admin connection.
+ * LIVE with a remote Sandbox, a missing or a malformed connection mode fails closed.
+ * TEST and UNKNOWN environments are gated separately by the caller.
+ */
+export function stripeEnvironmentMismatch(environment: 'TEST' | 'LIVE' | 'UNKNOWN', connectionMode: unknown): boolean {
+  return environment === 'LIVE' && connectionMode !== 'direct'
+}
+
+export function liveConnectionBlockMessage(connectionMode: unknown): string {
+  return connectionMode === 'remote-sandbox'
+    ? 'Sandbox is connected to a LIVE Stripe environment. Refund is blocked.'
+    : 'LIVE Stripe refunds require a verified direct Admin connection, and the connection mode could not be verified. Refund is blocked.'
 }
 
 export function refundInputCents(value: string): bigint | null {

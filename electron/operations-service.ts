@@ -215,7 +215,11 @@ export class OperationsService implements AdminOperationsApi {
       const scope = await this.scope(), intents = this.load(scope), slot = intentSlot(op, input)
       const previous = intents.find(i => intentSlot(i.operation, i.input) === slot)
       if (previous && JSON.stringify(previous.input) !== JSON.stringify(input)) return invalid('A saved intent exists for this operation and target. Resolve it before editing the payload.')
-      if (previous?.state === 'confirmed' && !(op === 'refund' && spec.replaySafe)) return invalid('This intent already succeeded. Refresh history and finish the saved action before starting another.')
+      // A confirmed intent is never submitted again (including refunds): the journal, key and
+      // confirmed state stay unchanged and no Backend or Stripe request is made.
+      if (previous?.state === 'confirmed') return invalid(op === 'refund'
+        ? 'This refund was already recorded by the Backend. Check its saved status instead; a confirmed refund is never submitted again.'
+        : 'This intent already succeeded. Refresh history and finish the saved action before starting another.')
       if (previous?.state === 'uncertain' && !spec.replaySafe) return invalid('The outcome is uncertain and this endpoint does not guarantee replay. Do not resubmit. Investigate authoritative history, then record the investigated outcome.')
       if (!previous && intents.length >= MAX_INTENTS) return invalid('Too many saved operator intents. Finish or resolve existing intents first.')
       const saved: SavedOperation = previous ?? { operation:op,input,key:randomUUID(),state:'uncertain' }

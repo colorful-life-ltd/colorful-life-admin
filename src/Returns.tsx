@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { adminReturns } from './admin-api'
 import RefundModal from './RefundModal'
+import { parseConnectionMode } from './refund-ux'
 import { financialHundredths, formatFinancialAmount, refundOutcomeUncertain } from '../electron/order-financials'
 import type { OrderFinancials } from '../electron/order-financials'
 import type { OrderDetail } from '../electron/order-contract'
@@ -92,7 +93,7 @@ export default function Returns({
           else if (active && f.status === 'rejected') setFinancials(null)
           if (active && o.status === 'fulfilled') setOrderDetail(o.value)
           if (active && e.status === 'fulfilled') setPaymentEnvironment(e.value)
-          if (active && c.status === 'fulfilled') setConnectionMode(c.value?.mode ?? null)
+          if (active && c.status === 'fulfilled') setConnectionMode(parseConnectionMode(c.value))
         }
       } catch (e) {
         if (active) setError(errorMessage(e))
@@ -142,7 +143,7 @@ export default function Returns({
     setFinancials(f.status === 'fulfilled' ? f.value : null)
     setOrderDetail(o.status === 'fulfilled' ? o.value : null)
     setPaymentEnvironment(e.status === 'fulfilled' ? e.value : null)
-    setConnectionMode(c.status === 'fulfilled' ? c.value?.mode ?? null : null)
+    setConnectionMode(parseConnectionMode(c.status === 'fulfilled' ? c.value : null))
   }
   const completedReturn = detail?.submissions.some((s) => s.lines.some((line) => line.status === 'COMPLETED')) ?? false
   const payment = financials?.payment.state === 'ready' ? financials.payment.value : null

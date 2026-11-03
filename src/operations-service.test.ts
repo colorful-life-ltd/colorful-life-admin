@@ -90,7 +90,7 @@ it('clears a saved refund after an authentication refusal before refund processi
   await expect(f.service.execute('refund',payload)).rejects.toThrow('Unable to reach service')
   expect(await f.service.pending()).toMatchObject([{state:'uncertain',input:payload}])
 })
-it.each(['uncertain','confirmed'] as const)('preserves a saved %s refund and its original key after an authentication failure on retry',async state=>{
+it.each(['uncertain'] as const)('preserves a saved %s refund and its original key after an authentication failure on retry',async state=>{
   const f=fixture(),payload={orderId:41,paymentId:7,amount:23.98,reason:'Return correction'},key='12345678-1234-1234-1234-123456789abc'
   const saved={operation:'refund' as const,input:payload,key,state}
   f.store.write('https://backend.test|2',{version:2,intents:[saved]})
@@ -147,4 +147,26 @@ it('retires legacy return execution without sending or discarding saved evidence
  expect(f.store.write).not.toHaveBeenCalled()
  expect(f.authenticatedFetch).not.toHaveBeenCalled()
  expect(await f.service.pending()).toEqual([legacy])
+})
+it('refuses to resubmit a confirmed refund and keeps its journal, key and confirmed state unchanged',async()=>{
+  const f=fixture(),payload={orderId:41,paymentId:7,amount:23.98,reason:'Return correction'},key='12345678-1234-1234-1234-123456789abc'
+  const saved={operation:'refund' as const,input:payload,key,state:'confirmed' as const}
+  f.store.write('https://backend.test|2',{version:2,intents:[saved]})
+  const writes=f.store.write.mock.calls.length
+  await expect(f.service.execute('refund',payload)).rejects.toThrow('a confirmed refund is never submitted again')
+  expect(f.authenticatedFetch).not.toHaveBeenCalled()
+  expect(f.store.write.mock.calls.length).toBe(writes)
+  expect(await f.service.pending()).toEqual([saved])
+})
+it('keeps the uncertain refund and its original key when a network failure is followed by an authentication failure',async()=>{
+  const f=fixture(),payload={orderId:41,paymentId:7,amount:23.98,reason:'Return correction'}
+  f.authenticatedFetch.mockRejectedValueOnce(new AuthError('network','Unable to reach the Colorful Life service.'))
+  await expect(f.service.execute('refund',payload)).rejects.toMatchObject({code:'network'})
+  const [first]=await f.service.pending() as SavedOperation[]
+  expect(first).toMatchObject({operation:'refund',input:payload,state:'uncertain'})
+  f.authenticatedFetch.mockRejectedValueOnce(new AuthError('session-invalid','Session expired.','SESSION_INVALID',401))
+  await expect(f.service.execute('refund',payload)).rejects.toMatchObject({code:'local-validation',requestSent:false})
+  expect(await f.service.pending()).toEqual([first])
+  const keys=f.authenticatedFetch.mock.calls.map(call=>(call[1] as {headers:Record<string,string>}).headers['Idempotency-Key'])
+  expect(keys).toEqual([first.key,first.key])
 })

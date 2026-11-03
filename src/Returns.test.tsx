@@ -537,3 +537,100 @@ it('keeps pending and review-required refunds from offering a new refund, with t
   expect(within(dialog).queryByRole('button', { name: 'Refund £' })).toBeNull()
   expect(window.adminOperations.execute).not.toHaveBeenCalled()
 })
+const openRefundWith = async (environment: 'TEST' | 'LIVE', status: unknown) => {
+  const detail = completedReturn(); setup(detail)
+  vi.mocked(window.adminOrders.paymentEnvironment).mockResolvedValue({ stripeEnvironment: environment, refundReconciliationEnabled: true })
+  if (status === 'no-api') (window as { adminConnection?: unknown }).adminConnection = undefined
+  else vi.mocked(window.adminConnection!.status).mockResolvedValue(status as never)
+  render(<Returns navigation={{ orderId: 41, status: '', page: 1 }} onNavigate={vi.fn()} onViewOriginalOrder={vi.fn()} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Review refund' }))
+  return await screen.findByRole('dialog', { name: /Refund · BB-R-41/ })
+}
+it.each([
+  ['missing mode', { state: 'connected', message: 'Connected' }],
+  ['null status', null],
+  ['malformed mode', { mode: 'remote_sandbox', state: 'connected', message: 'Connected' }],
+  ['wrong-case mode', { mode: 'DIRECT', state: 'connected', message: 'Connected' }],
+  ['missing connection API', 'no-api'],
+] as const)('blocks a LIVE refund when the connection mode is unverified (%s) and never submits', async (_label, status) => {
+  const dialog = await openRefundWith('LIVE', status)
+  expect(await within(dialog).findByText('LIVE Stripe requires a verified direct Admin connection. New refund submission is blocked.')).toBeInTheDocument()
+  expect(within(dialog).getByLabelText('Refund amount (GBP)')).toBeDisabled()
+  expect(within(dialog).getByRole('button', { name: 'Continue' })).toBeDisabled()
+  expect(window.adminOperations.execute).not.toHaveBeenCalled()
+})
+it('re-validates the connection mode at Continue: LIVE with a mode that became malformed is blocked', async () => {
+  let status: unknown = { mode: 'direct', state: 'connected', message: 'Direct' }
+  const dialog = await openRefundWith('LIVE', status)
+  vi.mocked(window.adminConnection!.status).mockImplementation(async () => status as never)
+  fireEvent.change(within(dialog).getByLabelText('Refund amount (GBP)'), { target: { value: '1.00' } })
+  fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'GOODWILL' } })
+  status = { mode: 'direct-ish', state: 'connected', message: 'Direct' }
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Continue' }))
+  expect(await within(dialog).findAllByText(/verified direct Admin connection/)).not.toHaveLength(0)
+  expect(within(dialog).queryByRole('button', { name: 'Refund £1.00 GBP' })).toBeNull()
+  expect(window.adminOperations.execute).not.toHaveBeenCalled()
+})
+it.each([
+  ['direct', 'Confirm that this is a real-money refund before continuing.'],
+  ['remote-sandbox', 'Sandbox is connected to a LIVE Stripe environment. Refund is blocked.'],
+] as const)('re-checks Stripe at Submit: TEST at Continue but LIVE at Submit on %s is not submitted', async (mode, message) => {
+  let environment: 'TEST' | 'LIVE' = 'TEST'
+  const dialog = await openRefundWith('TEST', { mode, state: 'connected', message: 'Connected' })
+  vi.mocked(window.adminOrders.paymentEnvironment).mockImplementation(async () => ({ stripeEnvironment: environment, refundReconciliationEnabled: true }))
+  fireEvent.change(within(dialog).getByLabelText('Refund amount (GBP)'), { target: { value: '1.00' } })
+  fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'GOODWILL' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Continue' }))
+  const submit = await within(dialog).findByRole('button', { name: 'Refund £1.00 GBP' })
+  environment = 'LIVE'
+  fireEvent.click(submit)
+  expect(await within(dialog).findByText(message)).toBeInTheDocument()
+  expect(window.adminOperations.execute).not.toHaveBeenCalled()
+})
+it('includes the delivery charge at most once, removes exactly what it added, and resets on a manual edit', async () => {
+  const dialog = await openRefund(completedReturn(), { ...order, totalAmount: '28.00', financials: { shipping: { chargePence: 300 } } })
+  const amount = within(dialog).getByLabelText('Refund amount (GBP)')
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Use returned items value' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Add delivery charge' }))
+  expect(amount).toHaveValue('15.50')
+  const toggle = within(dialog).getByRole('button', { name: 'Remove delivery charge' })
+  expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  fireEvent.click(toggle)
+  expect(amount).toHaveValue('12.50')
+  for (let i = 0; i < 5; i++) fireEvent.click(within(dialog).getByRole('button', { name: /delivery charge/ }))
+  expect(amount).toHaveValue('15.50')
+  fireEvent.change(amount, { target: { value: '10.00' } })
+  expect(within(dialog).getByRole('button', { name: 'Add delivery charge' })).toHaveAttribute('aria-pressed', 'false')
+  expect(window.adminOperations.execute).not.toHaveBeenCalled()
+})
+it('caps the delivery charge at the available balance, removes only the capped part, and adds nothing at full balance', async () => {
+  const dialog = await openRefund(completedReturn(), { ...order, totalAmount: '28.00', financials: { shipping: { chargePence: 300 } } })
+  const amount = within(dialog).getByLabelText('Refund amount (GBP)')
+  fireEvent.change(amount, { target: { value: '24.00' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Add delivery charge' }))
+  expect(amount).toHaveValue('25.00')
+  expect(within(dialog).getByText(/capped at the remaining refundable balance of £25\.00/)).toBeInTheDocument()
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Remove delivery charge' }))
+  expect(amount).toHaveValue('24.00')
+  fireEvent.change(amount, { target: { value: '25.00' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Add delivery charge' }))
+  expect(amount).toHaveValue('25.00')
+  expect(within(dialog).getByText(/no delivery charge was added/)).toBeInTheDocument()
+  expect(within(dialog).getByRole('button', { name: 'Add delivery charge' })).toHaveAttribute('aria-pressed', 'false')
+})
+it('keeps a verified RETIRED result when the following gate refresh fails, and keeps refunds blocked', async () => {
+  const saved = savedRefund(), dialog = await openSavedRefund('TEST', 'direct')
+  vi.mocked(window.adminOperations.checkRefundStatus).mockResolvedValueOnce({ state: 'RETIRED' })
+  vi.mocked(window.adminOrders.financials).mockRejectedValueOnce(new Error('financials unavailable'))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Check saved refund status' }))
+  expect(await within(dialog).findByRole('heading', { name: 'Saved request key retired' })).toBeInTheDocument()
+  expect(within(dialog).getByText(/permanently retired this exact request key/)).toBeInTheDocument()
+  expect(within(dialog).getByText(/could not be refreshed, so a new refund stays blocked/)).toBeInTheDocument()
+  expect(within(dialog).queryByText(/saved refund status could not be verified/i)).toBeNull()
+  expect(within(dialog).queryByRole('button', { name: /Review retry/ })).toBeNull()
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Correct saved amount' }))
+  await waitFor(() => expect(window.adminOperations.finishUnsubmittedRefund).toHaveBeenCalledWith(saved.input, saved.key))
+  expect(await within(dialog).findByLabelText('Refund amount (GBP)')).toBeDisabled()
+  expect(within(dialog).getByRole('button', { name: 'Continue' })).toBeDisabled()
+  expect(window.adminOperations.execute).not.toHaveBeenCalled()
+})

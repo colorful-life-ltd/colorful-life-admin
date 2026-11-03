@@ -134,3 +134,14 @@ it('preserves a legacy return intent for investigation and links directly to its
  expect(screen.queryByRole('button',{name:'Load saved intent'})).not.toBeInTheDocument()
  fireEvent.click(screen.getByRole('button',{name:'View Returns'}));expect(open).toHaveBeenCalledWith(41);expect(api.execute).not.toHaveBeenCalled();expect(api.finish).not.toHaveBeenCalled()
 })
+it.each([
+ ['missing mode',{state:'connected',message:'Connected'}],
+ ['null status',null],
+ ['malformed mode',{mode:'remote_sandbox',state:'connected',message:'Connected'}],
+] as const)('blocks a standalone LIVE refund when the connection mode is unverified (%s)',async(_label,status)=>{
+ prepareRefundWorkflow('LIVE')
+ vi.mocked(window.adminConnection!.status).mockResolvedValue(status as never)
+ fireEvent.click(screen.getByRole('button',{name:'Initiate refund'}))
+ await waitFor(()=>expect(screen.getByRole('alert')).toHaveTextContent(/verified direct Admin connection/))
+ expect(api.execute).not.toHaveBeenCalled()
+})

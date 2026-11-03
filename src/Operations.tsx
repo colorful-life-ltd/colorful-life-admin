@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { adminOperations } from './admin-api'
 import { adminOrders, adminConnection } from './admin-api'
 import { financialHundredths, formatFinancialAmount } from '../electron/order-financials'
-import { stripeEnvironmentMismatch } from './refund-ux'
+import { liveConnectionBlockMessage, parseConnectionMode, stripeEnvironmentMismatch } from './refund-ux'
 import type { PaymentEnvironment } from '../electron/payment-environment'
 import { operations, type Field, type InvestigationDecision, type Operation, type OperationSpec, type OperatorInput, type SafeValue, type SavedOperation } from '../electron/operations-contract'
 const message = (e: unknown) => e instanceof Error ? e.message : 'Operator request failed. Refresh authoritative history.'
@@ -62,7 +62,8 @@ export default function Operations({ sessionBlocked = false, orderId, listingId,
         const [envResult, financeResult, connectionResult] = await Promise.all([
           adminOrders.paymentEnvironment(), adminOrders.financials(order), adminConnection?.status?.() ?? Promise.resolve(null),
         ])
-        environment = envResult; financial = financeResult; connectionMode = connectionResult?.mode ?? null
+        // Only an exact reported mode counts; a missing or malformed status is unverified (null).
+        environment = envResult; financial = financeResult; connectionMode = parseConnectionMode(connectionResult)
       } catch { setError('Stripe environment and payment records could not be refreshed. Refund submission is blocked.'); return }
       setRefundEnvironment(environment)
       const payment = financial.payment.state === 'ready' ? financial.payment.value : null
@@ -77,7 +78,7 @@ export default function Operations({ sessionBlocked = false, orderId, listingId,
         || payment.status !== 'SUCCEEDED' || !payment.paidAt || !payment.paymentIntentReference || available <= 0n
         || refunds.some(r => r.status === 'PROCESSING' || r.reviewRequired || r.resolutionCode !== null && r.resolutionCode !== `REFUND_${r.status}`)
         || !['TEST','LIVE'].includes(environment.stripeEnvironment) || mismatch) {
-        setError(mismatch ? 'Sandbox is reporting LIVE Stripe. Refund submission is blocked.' : 'Payment, Stripe environment or refundable balance could not be safely verified. Refund submission is blocked.')
+        setError(mismatch ? (connectionMode === 'remote-sandbox' ? 'Sandbox is reporting LIVE Stripe. Refund submission is blocked.' : liveConnectionBlockMessage(connectionMode)) : 'Payment, Stripe environment or refundable balance could not be safely verified. Refund submission is blocked.')
         return
       }
       if (requested <= 0n || requested > available) { const safeAvailable=available<0n?0n:available; const major=`${safeAvailable/100n}.${String(safeAvailable%100n).padStart(2,'0')}`; setError(`Enter an amount up to the verified remaining balance of ${formatFinancialAmount(major, 'GBP')}.`); return }
