@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from 'react'
 import { adminOrders } from './admin-api'
 import { canCancel, canFulfil, cancellationReasons } from '../electron/order-contract'
 import type { CancellationReason, Carrier, OrderDetail, OrderPage } from '../electron/order-contract'
-import { validateDispatch } from '../electron/order-service'
+import { parseShippingCostPence, validateDispatch } from '../electron/order-service'
 import { isAdminIpcError } from '../electron/ipc-error-contract'
 import './Orders.css'
 
@@ -70,6 +70,10 @@ export default function Orders({ sessionBlocked = false, initialOrderId = null, 
   const summaryMismatch = order && financePayment !== undefined && (order.paymentStatus !== (financePayment?.status ?? null)
     || (order.payment !== null && (order.payment.currency !== financePayment?.currency || order.payment.paidAt !== financePayment?.paidAt)))
   const financialWarning = summaryMismatch ? 'Order and payment reads do not agree. Refresh before dispatching.' : dispatchFinancialWarning(financials)
+  const costPreview = (() => {
+    if (!cost.trim()) return 'What we paid the carrier, in pounds, for example 3.99.'
+    try { return `Will be recorded as ${money((parseShippingCostPence(cost) / 100).toFixed(2), 'GBP')}.` } catch (e) { return message(e) }
+  })()
   const submit = async () => {
     if (!order || !action || inFlight.current || sessionBlocked || (action !== 'cancel' && financialWarning)) return
     const current = generation.current
@@ -81,8 +85,8 @@ export default function Orders({ sessionBlocked = false, initialOrderId = null, 
     let input
     try {
       if (action === 'dispatch') {
-        if (!cost.trim()) throw new Error('Enter the actual shipping cost.')
-        input = validateDispatch({ carrier, trackingNumber: tracking, actualShippingCost: Number(cost), ...(carrier === 'OTHER' ? { carrierName } : {}) })
+        // Integer pence from the exact typed text; pence / 100 serializes as the same two-decimal amount (399 -> 3.99).
+        input = validateDispatch({ carrier, trackingNumber: tracking, actualShippingCost: parseShippingCostPence(cost) / 100, ...(carrier === 'OTHER' ? { carrierName } : {}) })
       }
     } catch (e) { setError(message(e)); return }
     inFlight.current = true; setPending(true); setError(''); setFeedback('')
@@ -144,7 +148,7 @@ export default function Orders({ sessionBlocked = false, initialOrderId = null, 
         <h3 id="order-confirm-title">{action === 'dispatch' ? 'Confirm Shipment' : action === 'cancel' ? 'Cancel Order' : 'Mark as Preparing'}</h3>
         <p>{action === 'cancel' ? 'Confirm cancellation of this order. This action does not refund a payment.' : action === 'dispatch' ? 'Confirm that this order has been shipped. Shipment details cannot be overwritten.' : 'Confirm that preparation of this order has started.'}</p>
         <fieldset disabled={pending}>
-          {action === 'dispatch' && <><label htmlFor="order-carrier">Carrier</label><select id="order-carrier" value={carrier} onChange={e => setCarrier(e.target.value as Carrier)}>{(['ROYAL_MAIL', 'EVRI', 'DPD', 'OTHER'] as const).map(c => <option key={c} value={c}>{label(c)}</option>)}</select>{carrier === 'OTHER' && <><label htmlFor="order-carrier-name">Carrier name</label><input id="order-carrier-name" required maxLength={100} value={carrierName} onChange={e => setCarrierName(e.target.value)} /></>}<label htmlFor="order-tracking">Tracking number</label><input id="order-tracking" required maxLength={100} value={tracking} onChange={e => setTracking(e.target.value)} /><label htmlFor="order-cost">Actual shipping cost</label><input id="order-cost" type="number" min="0" max="100000" step="any" required value={cost} onChange={e => setCost(e.target.value)} /></>}
+          {action === 'dispatch' && <><label htmlFor="order-carrier">Carrier</label><select id="order-carrier" value={carrier} onChange={e => setCarrier(e.target.value as Carrier)}>{(['ROYAL_MAIL', 'EVRI', 'DPD', 'OTHER'] as const).map(c => <option key={c} value={c}>{label(c)}</option>)}</select>{carrier === 'OTHER' && <><label htmlFor="order-carrier-name">Carrier name</label><input id="order-carrier-name" required maxLength={100} value={carrierName} onChange={e => setCarrierName(e.target.value)} /></>}<label htmlFor="order-tracking">Tracking number</label><input id="order-tracking" required maxLength={100} value={tracking} onChange={e => setTracking(e.target.value)} /><label htmlFor="order-cost">Actual shipping cost</label><input id="order-cost" type="text" inputMode="decimal" autoComplete="off" required aria-describedby="order-cost-hint" value={cost} onChange={e => setCost(e.target.value)} /><p id="order-cost-hint" className="field-hint">{costPreview}</p></>}
           {action === 'cancel' && <><label htmlFor="order-reason">Cancellation reason</label><select id="order-reason" value={reason} onChange={e => setReason(e.target.value as CancellationReason)}>{cancellationReasons.map(r => <option key={r} value={r}>{label(r)}</option>)}</select></>}
         </fieldset>
         {error && <p className="error-message" role="alert">{error}</p>}

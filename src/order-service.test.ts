@@ -1,6 +1,6 @@
 import { AuthService } from '../electron/auth-service'
 import { describe, expect, it, vi } from 'vitest'
-import { OrderService, validateDispatch } from '../electron/order-service'
+import { OrderService, parseShippingCostPence, shippingCostPence, validateDispatch } from '../electron/order-service'
 import { order, orderPage } from './test-fixtures/order'
 import { canCancel, canFulfil } from '../electron/order-contract'
 import { safeTrackingUrl } from '../electron/tracking-url'
@@ -101,4 +101,34 @@ it.each(['IN_TRANSIT','DELIVERED'])('accepts Backend delivery progress %s withou
 it.each(['CANCELLATION_PENDING','INVENTORY_DISCREPANCY','PROVIDER_DISPUTE_REVIEW_REQUIRED','PROVIDER_REVERSAL_REVIEW_REQUIRED','PAYMENT_UNRESOLVED','PAYMENT_AMOUNT_MISMATCH','REFUND_IN_PROGRESS','FULLY_REFUNDED'])('preserves structured fulfilment reason %s',async reason=>{
  const fetch=vi.fn().mockResolvedValue(response({error:{code:'ORDER_PAYMENT_NOT_VERIFIED',message:'Cannot fulfil order',reason}},409))
  await expect(new OrderService({authenticatedFetch:fetch}).preparing(41)).rejects.toMatchObject({backendCode:reason,status:409})
+})
+
+describe('actual shipping cost precision (Order #10: 3.99 recorded as 399)', () => {
+  it.each([['3.99', 399], ['15.00', 1500], ['15.01', 1501], ['15', 1500], ['0', 0], [' 3.5 ', 350], ['100000.00', 10_000_000]])('parses %s as %i pence', (typed, pence) => {
+    expect(parseShippingCostPence(typed)).toBe(pence)
+  })
+  it.each([
+    ['', 'Enter the actual shipping cost'], ['   ', 'Enter the actual shipping cost'],
+    ['3,99', 'full stop'], ['1,500.00', 'full stop'], ['-1', 'negative'], ['-0.01', 'negative'],
+    ['abc', 'two decimal places'], ['3.999', 'two decimal places'], ['1e3', 'two decimal places'], ['£3.99', 'two decimal places'],
+    ['3.', 'two decimal places'], ['.99', 'two decimal places'], ['Infinity', 'two decimal places'], ['0x10', 'two decimal places'],
+    ['100000.01', 'cannot exceed'], ['9999999', 'cannot exceed'], ['1'.repeat(400), 'cannot exceed'],
+  ])('rejects %j instead of recording a different amount', (typed, text) => {
+    expect(() => parseShippingCostPence(typed)).toThrow(text)
+  })
+  it('rejects non-string input', () => { for (const v of [3.99, null, undefined, {}]) expect(() => parseShippingCostPence(v)).toThrow() })
+  it('accepts whole-pence amounts and rejects sub-pence or out-of-range amounts at the IPC boundary', () => {
+    for (const cost of [3.99, 15, 15.01, 0, 100000]) expect(validateDispatch({ ...input, actualShippingCost: cost }).actualShippingCost).toBe(cost)
+    for (const cost of [3.999, 0.001, -0.01, 100000.01, Infinity, NaN]) expect(() => validateDispatch({ ...input, actualShippingCost: cost })).toThrow('whole pence')
+  })
+  it.each([['3.99', '3.99'], ['15.00', '15'], ['15.01', '15.01']])('serializes %s to the Backend unchanged and keeps the recorded response amount', async (typed, recorded) => {
+    const fetch = vi.fn().mockResolvedValue(response({ ...order, status: 'DISPATCHED', actualShippingCost: recorded }))
+    const api = new OrderService({ authenticatedFetch: fetch })
+    const result = await api.dispatch(41, { ...input, actualShippingCost: parseShippingCostPence(typed) / 100 })
+    const body = JSON.parse(fetch.mock.calls[0][1].body)
+    expect(body.actualShippingCost).toBe(Number(recorded))
+    expect(fetch.mock.calls[0][1].body).toContain(`"actualShippingCost":${recorded}`)
+    expect(shippingCostPence(body.actualShippingCost)).toBe(parseShippingCostPence(typed))
+    expect(result.actualShippingCost).toBe(recorded)
+  })
 })

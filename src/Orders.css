@@ -11,3 +11,4 @@
 .order-dialog::backdrop { background: rgb(0 0 0 / 40%); }
 .order-dialog fieldset { border: 0; padding: 0; display: grid; gap: 8px; }
 .order-dialog input, .order-dialog select { padding: 10px; border: 1px solid var(--border); border-radius: 8px; font: inherit; }
+.order-dialog .field-hint { margin: 0; font-size: 0.9em; color: var(--text-muted); }
