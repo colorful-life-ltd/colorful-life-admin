@@ -20,4 +20,11 @@ describe('Electron IPC error contract', () => {
       status: serviceError.status,
     })
   })
+  it('preserves an explicit no-refund-submitted disposition across Electron IPC', () => {
+    const envelope = serializeIpcError(Object.assign(new Error('Refund amount exceeds capacity'), {
+      code: 'api', backendCode: 'REFUND_CAPACITY_EXCEEDED', status: 409,
+      refundSubmissionDisposition: 'NOT_SUBMITTED',
+    }))
+    expect(restoreIpcError(envelope)).toMatchObject({ refundSubmissionDisposition: 'NOT_SUBMITTED' })
+  })
 })

@@ -4,6 +4,7 @@ import type { AuthService } from './auth-service.js'
 import { readBackendError } from './backend-error.js'
 import { cancellationReasons } from './order-contract.js'
 import type { AdminOrdersApi, Carrier, CancellationReason, DispatchInput, OrderDetail, OrderPage, OrderSummary } from './order-contract.js'
+import { parsePaymentEnvironment } from './payment-environment.js'
 
 export class OrderError extends Error {
   readonly code: string
@@ -109,6 +110,9 @@ export class OrderService implements AdminOrdersApi {
       refunds: refunds.status === 'fulfilled' ? { state: 'ready', value: refunds.value } : { state: 'error', message: 'Refund history could not be read. Refresh to retry.' },
       consistent: payment.status === 'fulfilled' && refunds.status === 'fulfilled' && financialsConsistent(payment.value, refunds.value),
     }
+  }
+  async paymentEnvironment() {
+    return parsePaymentEnvironment(await this.request('/admin/payment-environment'))
   }
   async list(page = 1, pageSize = 20): Promise<OrderPage> {
     const v = await this.request(`/admin/orders?page=${validatePage(page, 10000)}&pageSize=${validatePage(pageSize, 50)}`)

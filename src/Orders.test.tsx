@@ -9,7 +9,7 @@ import type { OrderDetail } from '../electron/order-contract'
 beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
   HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
-  window.adminOrders = { financials: vi.fn().mockResolvedValue(financials), list: vi.fn().mockResolvedValue(orderPage), get: vi.fn().mockResolvedValue(order), preparing: vi.fn().mockResolvedValue(order), dispatch: vi.fn().mockResolvedValue(order), cancel: vi.fn().mockResolvedValue(undefined) }
+  window.adminOrders = { financials: vi.fn().mockResolvedValue(financials), paymentEnvironment: vi.fn().mockResolvedValue({stripeEnvironment:'TEST',refundReconciliationEnabled:true}), list: vi.fn().mockResolvedValue(orderPage), get: vi.fn().mockResolvedValue(order), preparing: vi.fn().mockResolvedValue(order), dispatch: vi.fn().mockResolvedValue(order), cancel: vi.fn().mockResolvedValue(undefined) }
 })
 afterEach(cleanup)
 const open = async (value: OrderDetail = order) => {

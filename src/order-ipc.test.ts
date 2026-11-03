@@ -8,13 +8,15 @@ import { adminOrders } from './admin-api'
 import type { AdminOrdersApi } from '../electron/order-contract'
 it('validates every order IPC operation before forwarding to the authenticated service', async () => {
   const handlers = new Map<string, OrderIpcHandler>()
-  const service = { financials: vi.fn(), list: vi.fn(), get: vi.fn(), preparing: vi.fn(), dispatch: vi.fn(), cancel: vi.fn() }
+  const service = { financials: vi.fn(), paymentEnvironment: vi.fn(), list: vi.fn(), get: vi.fn(), preparing: vi.fn(), dispatch: vi.fn(), cancel: vi.fn() }
   registerOrderIpc((name, handler) => handlers.set(name, handler), service)
-  expect(handlers.size).toBe(6)
+  expect(handlers.size).toBe(7)
   handlers.get('admin-orders:list')!({}, 2, 20)
   expect(service.list).toHaveBeenCalledWith(2, 20)
   handlers.get('admin-orders:get')!({}, 41); handlers.get('admin-orders:preparing')!({}, 41)
   handlers.get('admin-orders:financials')!({}, 41)
+  handlers.get('admin-orders:payment-environment')!({})
+  expect(service.paymentEnvironment).toHaveBeenCalledOnce()
   expect(service.financials).toHaveBeenCalledWith(41)
   expect(service.get).toHaveBeenCalledWith(41); expect(service.preparing).toHaveBeenCalledWith(41)
   handlers.get('admin-orders:dispatch')!({}, 41, { carrier: 'ROYAL_MAIL', trackingNumber: 'ab 123456789 gb', actualShippingCost: 0 })
@@ -39,7 +41,7 @@ it('rejects spoofed senders and child frames before the financial read handler',
   const window = { webContents: contents, isDestroyed: () => false } as unknown as BrowserWindow
   const financials = vi.fn().mockResolvedValue({ ready: true })
   const handlers = new Map<string, ReturnType<typeof secureIpcHandler>>()
-  registerOrderIpc((name, handler) => handlers.set(name, secureIpcHandler(() => window, frame.url, handler)), { list: vi.fn(), get: vi.fn(), preparing: vi.fn(), dispatch: vi.fn(), cancel: vi.fn(), financials })
+  registerOrderIpc((name, handler) => handlers.set(name, secureIpcHandler(() => window, frame.url, handler)), { list: vi.fn(), get: vi.fn(), preparing: vi.fn(), dispatch: vi.fn(), cancel: vi.fn(), financials, paymentEnvironment: vi.fn() })
   const handler = handlers.get('admin-orders:financials')!
   for (const event of [
     { sender: contents, senderFrame: null },

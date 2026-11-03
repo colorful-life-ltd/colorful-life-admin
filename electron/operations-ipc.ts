@@ -10,5 +10,9 @@ export function registerOperationsIpc(handle: (channel: string, handler: (_event
     // The service revalidates decision and note before any I/O.
     return service.resolve(operation as Operation, validateOperationInput(operation,input), decision as InvestigationDecision, note as string)
   })
+  handle('admin-operations:check-refund-status', (_event, input, key) =>
+    service.checkRefundStatus(validateOperationInput('refund', input), key as string))
+  handle('admin-operations:finish-unsubmitted-refund', (_event, input, key) =>
+    service.finishUnsubmittedRefund(validateOperationInput('refund', input), key as string))
   handle('admin-operations:pending', () => service.pending())
 }

@@ -46,12 +46,17 @@ export type Operation = keyof typeof operations
 export type OperatorInput = Record<string, string | number | boolean | string[] | null>
 export type SafeValue = string | number | boolean | null | SafeValue[] | { [key: string]: SafeValue }
 export type SavedOperation = { operation: Operation; input: OperatorInput; key: string; state: 'uncertain' | 'confirmed' | 'rejected' }
+export type RefundStatusCheck = { state: 'NOT_SUBMITTED' } | { state: 'RETIRED' } | { state: 'RECORDED'; refund: { refundId: number; status: 'SUCCEEDED' | 'FAILED' | 'PROCESSING'; amount: string; currency: 'GBP'; provider: 'STRIPE'; resolutionCode?: string; reviewRequired?: boolean } }
 export type InvestigationDecision = 'APPLIED' | 'NOT_APPLIED'
 export interface AdminOperationsApi {
   read(operation: Operation, input: OperatorInput): Promise<SafeValue>
   execute(operation: Operation, input: OperatorInput): Promise<SafeValue>
   /** Every saved intent. Each blocks only the same operation on the same target. */
   pending(): Promise<SavedOperation[]>
+  /** Authenticated GET only; validates the saved idempotency key against Backend state. */
+  checkRefundStatus(input: OperatorInput, key: string): Promise<RefundStatusCheck>
+  /** Repeats the read-only Backend check and clears only a proven unsubmitted local intent. */
+  finishUnsubmittedRefund(input: OperatorInput, key: string): Promise<void>
   /** Clears a confirmed or rejected intent for this operation and target. */
   finish(operation: Operation, input: OperatorInput): Promise<void>
   /** Records an investigated outcome for an uncertain, non-replayable intent, then clears it. */

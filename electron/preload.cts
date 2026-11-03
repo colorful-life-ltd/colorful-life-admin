@@ -96,6 +96,7 @@ contextBridge.exposeInMainWorld('adminPurchases', adminPurchases)
 
 const adminOrders: AdminOrdersApi = {
   financials: (id) => forwardIpcResult(ipcRenderer.invoke('admin-orders:financials', id)),
+  paymentEnvironment: () => forwardIpcResult(ipcRenderer.invoke('admin-orders:payment-environment')),
   list: (page, pageSize) => forwardIpcResult(ipcRenderer.invoke('admin-orders:list', page, pageSize)),
   get: (id) => forwardIpcResult(ipcRenderer.invoke('admin-orders:get', id)),
   preparing: (id) => forwardIpcResult(ipcRenderer.invoke('admin-orders:preparing', id)),
@@ -121,6 +122,8 @@ const adminOperations: AdminOperationsApi = {
   pending: () => forwardIpcResult(ipcRenderer.invoke('admin-operations:pending')),
   finish: (operation,input) => forwardIpcResult(ipcRenderer.invoke('admin-operations:finish',operation,input)),
   resolve: (operation,input,decision,note) => forwardIpcResult(ipcRenderer.invoke('admin-operations:resolve',operation,input,decision,note)),
+  checkRefundStatus: (input,key) => forwardIpcResult(ipcRenderer.invoke('admin-operations:check-refund-status',input,key)),
+  finishUnsubmittedRefund: (input,key) => forwardIpcResult(ipcRenderer.invoke('admin-operations:finish-unsubmitted-refund',input,key)),
 }
 contextBridge.exposeInMainWorld('adminOperations',adminOperations)
 

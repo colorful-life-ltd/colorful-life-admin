@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import Operations from './Operations'
+import { financials } from './test-fixtures/order'
 const api={pending:vi.fn(),read:vi.fn(),execute:vi.fn(),finish:vi.fn()}
 beforeEach(()=>{vi.clearAllMocks();Object.assign(window,{adminOperations:api});api.pending.mockResolvedValue([]);api.read.mockResolvedValue([]);api.execute.mockResolvedValue({withdrawn:true,requestId:'9007199254740993'});api.finish.mockResolvedValue(undefined)})
 afterEach(cleanup)
@@ -32,6 +33,35 @@ it('requires session availability and explicit confirmation for write operations
  fireEvent.change(screen.getByLabelText('Workflow'),{target:{value:'stocktake'}})
  expect(screen.getByRole<HTMLButtonElement>('button',{name:'Reconcile physical stocktake'}).disabled).toBe(true)
  expect(api.execute).not.toHaveBeenCalled()
+})
+const prepareRefundWorkflow=(environment:'TEST'|'LIVE'|'UNKNOWN',mode:'direct'|'remote-sandbox'='direct')=>{
+ Object.assign(window,{adminOrders:{financials:vi.fn().mockResolvedValue(financials),paymentEnvironment:vi.fn().mockResolvedValue({stripeEnvironment:environment,refundReconciliationEnabled:true})},adminConnection:{status:vi.fn().mockResolvedValue({mode,state:'connected',message:'Connected'})}})
+ render(<Operations/>);fireEvent.change(screen.getByLabelText('Workflow'),{target:{value:'refund'}})
+ fireEvent.change(screen.getByLabelText('Order ID'),{target:{value:'41'}});fireEvent.change(screen.getByLabelText('Payment ID'),{target:{value:'7'}})
+ fireEvent.change(screen.getByLabelText('Refund amount (GBP)'),{target:{value:'5.00'}});fireEvent.change(screen.getByLabelText('Reason (at least 10 characters)'),{target:{value:'Approved refund test'}})
+ fireEvent.click(screen.getByRole('checkbox'))
+}
+it.each([['UNKNOWN','direct'],['LIVE','remote-sandbox']] as const)('blocks standalone refunds for %s / %s without submitting',async(environment,mode)=>{
+ prepareRefundWorkflow(environment,mode)
+ fireEvent.click(screen.getByRole('button',{name:'Initiate refund'}))
+ await waitFor(()=>expect(screen.getByRole('alert')).toHaveTextContent(/blocked/))
+ expect(api.execute).not.toHaveBeenCalled()
+})
+it('checks standalone refund capacity and permits a TEST request only after fresh reads',async()=>{
+ prepareRefundWorkflow('TEST')
+ fireEvent.click(screen.getByRole('button',{name:'Initiate refund'}))
+ await waitFor(()=>expect(api.execute).toHaveBeenCalledWith('refund',{orderId:41,paymentId:7,amount:5,reason:'Approved refund test'}))
+ expect(window.adminOrders.financials).toHaveBeenCalledWith(41)
+ expect(window.adminOrders.paymentEnvironment).toHaveBeenCalled()
+})
+it('requires an explicit LIVE confirmation for a standalone refund',async()=>{
+ prepareRefundWorkflow('LIVE')
+ fireEvent.click(screen.getByRole('button',{name:'Initiate refund'}))
+ await waitFor(()=>expect(screen.getByRole('checkbox',{name:/LIVE Stripe refund may move real money/})).toBeInTheDocument())
+ expect(api.execute).not.toHaveBeenCalled()
+ fireEvent.click(screen.getByRole('checkbox',{name:/LIVE Stripe refund may move real money/}))
+ fireEvent.click(screen.getByRole('button',{name:'Initiate refund'}))
+ await waitFor(()=>expect(api.execute).toHaveBeenCalledOnce())
 })
 it('offers safe recovery of saved uncertainty and no discard button',async()=>{
  api.pending.mockResolvedValue([{operation:'withdrawCancellation',input:{orderId:41,requestId:'123',reason:'Withdraw mistaken cancellation'},key:'saved-key',state:'uncertain'}])
@@ -103,4 +133,25 @@ it('preserves a legacy return intent for investigation and links directly to its
  expect(await screen.findByText(/Legacy return intent retained/)).toBeInTheDocument()
  expect(screen.queryByRole('button',{name:'Load saved intent'})).not.toBeInTheDocument()
  fireEvent.click(screen.getByRole('button',{name:'View Returns'}));expect(open).toHaveBeenCalledWith(41);expect(api.execute).not.toHaveBeenCalled();expect(api.finish).not.toHaveBeenCalled()
+})
+it.each([
+ ['missing mode',{state:'connected',message:'Connected'}],
+ ['null status',null],
+ ['malformed mode',{mode:'remote_sandbox',state:'connected',message:'Connected'}],
+] as const)('blocks a standalone LIVE refund when the connection mode is unverified (%s)',async(_label,status)=>{
+ prepareRefundWorkflow('LIVE')
+ vi.mocked(window.adminConnection!.status).mockResolvedValue(status as never)
+ fireEvent.click(screen.getByRole('button',{name:'Initiate refund'}))
+ await waitFor(()=>expect(screen.getByRole('alert')).toHaveTextContent(/verified direct Admin connection/))
+ expect(api.execute).not.toHaveBeenCalled()
+})
+it.each([
+ ['failed',{mode:'direct',state:'failed',message:'Connection failed'}],
+ ['connecting',{mode:'direct',state:'connecting',message:'Connecting securely to the Backend'}],
+] as const)('blocks a standalone LIVE refund when the direct connection is %s',async(_label,status)=>{
+ prepareRefundWorkflow('LIVE')
+ vi.mocked(window.adminConnection!.status).mockResolvedValue(status as never)
+ fireEvent.click(screen.getByRole('button',{name:'Initiate refund'}))
+ await waitFor(()=>expect(screen.getByRole('alert')).toHaveTextContent(/verified direct Admin connection/))
+ expect(api.execute).not.toHaveBeenCalled()
 })

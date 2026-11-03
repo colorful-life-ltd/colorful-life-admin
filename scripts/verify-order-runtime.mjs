@@ -16,6 +16,7 @@ async function run() {
   const requests = []
   let securityReview = true
   let financialMode = 'empty'
+  let refundPosted = false
   let cancellationLost = false
   const cancellationId = '9007199254740993'
   const timestamp = '2026-10-13T10:00:00Z'
@@ -43,10 +44,17 @@ async function run() {
     else if(req.url==='/admin/returns/41/lines/10/authorize') {assert.equal(body.shippingPayer,'SELLER');assert.equal(body.rightsReviewed,true);assert.match(body.postageInstructions,/^Please return the item using a tracked delivery service.*reimburse reasonable return postage costs/);Object.assign(returnView.submissions[0].lines[0],{status:'AUTHORIZED',authorizedAt:timestamp,shippingPayer:body.shippingPayer,instructions:{reference:'BB-R-41',address:returnView.defaultInstructions.address,instructions:body.instructions,postageInstructions:body.postageInstructions,shippingPayer:body.shippingPayer}});data=returnView}
     else if(req.url==='/admin/returns/41/lines/10/receive') {assert.equal(typeof body.note,'string');Object.assign(returnView.submissions[0].lines[0],{status:'RECEIVED',receivedAt:body.receivedAt,receiptNote:body.note,receivedByUserId:1});data=returnView}
     else if (req.url === '/auth/login') data = { token: 'order-runtime-token', accessTokenExpiresAt: new Date(Date.now() + 3600000).toISOString(), refreshToken: 'order-runtime-refresh', refreshExpiresAt: new Date(Date.now() + 86400000).toISOString() }
-    else if (req.url === '/orders/41/payments') data = [{ id: 7, orderId: 41, amount: '25', currency: 'GBP', provider: 'STRIPE', status: 'SUCCEEDED', paidAt: timestamp, refundedAmount: financialMode === 'full' ? '25' : '0', reservedRefundAmount: '0', providerReference: 'DO_NOT_EXPOSE', idempotencyKey: 'DO_NOT_EXPOSE' }]
-    else if (req.url === '/orders/41/refunds') {
+    else if (req.url === '/orders/41/payments') data = [{ id: 7, orderId: 41, amount: '25', currency: 'GBP', provider: 'STRIPE', status: 'SUCCEEDED', paidAt: timestamp, refundedAmount: financialMode === 'full' ? '25' : '0', reservedRefundAmount: refundPosted ? '23.98' : '0', providerReference: 'DO_NOT_EXPOSE', paymentIntentReference: 'pi_testruntime', idempotencyKey: 'DO_NOT_EXPOSE' }]
+    else if (req.url === '/orders/41/refunds' && req.method === 'GET') {
       if (financialMode === 'failure') { res.statusCode = 503; data = { error: 'Unavailable' } }
-      else data = financialMode === 'full' ? [{ id: 8, orderId: 41, paymentId: 7, amount: '25', currency: 'GBP', provider: 'STRIPE', status: 'SUCCEEDED', createdAt: timestamp, reason: 'Fixture refund', performedByUserId: 1, resolutionCode: 'REFUND_SUCCEEDED', reviewRequired: false, providerReference: 'DO_NOT_EXPOSE', providerOutcome: { secret: 'DO_NOT_EXPOSE' } }] : []
+      else data = financialMode === 'full' ? [{ id: 8, orderId: 41, paymentId: 7, amount: '25', currency: 'GBP', provider: 'STRIPE', status: 'SUCCEEDED', createdAt: timestamp, reason: 'Fixture refund', performedByUserId: 1, resolutionCode: 'REFUND_SUCCEEDED', reviewRequired: false, providerReference: 'DO_NOT_EXPOSE', providerOutcome: { secret: 'DO_NOT_EXPOSE' } }] : refundPosted ? [{ id: 92, orderId: 41, paymentId: 7, amount: '23.98', currency: 'GBP', provider: 'STRIPE', status: 'PROCESSING', createdAt: timestamp, reason: 'BB-R-41 — Faulty — Runtime test', performedByUserId: 1, resolutionCode: 'PROVIDER_PENDING', reviewRequired: false }] : []
+    }
+    else if (req.url === '/admin/payment-environment') data = { stripeEnvironment: 'TEST', refundReconciliationEnabled: false }
+    else if (req.url === '/orders/41/refunds') {
+      assert.equal(req.method, 'POST')
+      assert.deepEqual(body, { paymentId: 7, amount: 23.98, reason: 'BB-R-41 — Faulty — Runtime test' })
+      refundPosted = true; financialMode = 'pending'
+      data = { refundId: 92, status: 'PROCESSING', amount: '23.98', currency: 'GBP', provider: 'STRIPE', resolutionCode: 'PROVIDER_PENDING', reviewRequired: false }
     }
     else if (req.url === '/profile') data = { id: 1, email: 'admin@test.invalid', role: 'ADMIN', createdAt: timestamp, updatedAt: timestamp }
     else if (req.url.startsWith('/products?')) data = { items: [], pagination: { page: 1, pageSize: 100, totalItems: 0, totalPages: 0 } }
@@ -206,6 +214,42 @@ async function run() {
     assert(returnRequests.filter(r=>r.path.startsWith('/admin/returns')).every(r=>r.auth==='Bearer order-runtime-token'))
     assert.equal(returnRequests.filter(r=>r.method==='POST').length,2)
     assert(returnRequests.filter(r=>r.method==='POST').every(r=>r.path.startsWith('/admin/returns/')))
+    // Revisit the completed return and exercise the compiled Refund V2 modal against
+    // this local fixture server only. No Stripe or real Backend is contacted.
+    Object.assign(returnView.submissions[0].lines[0], { status: 'COMPLETED', completedAt: timestamp, inspectedAt: timestamp, inspectionCondition: 'RESALEABLE', restockQuantity: 1 })
+    await click('Back to Returns')
+    await until("!!document.querySelector('.return-queue-card')")
+    await js("document.querySelector('.return-queue-card').click()")
+    await until("document.body.textContent.includes('Returns · BB-R-41')")
+    await click('Review refund')
+    await until("!!document.querySelector('dialog.refund-v2')?.matches(':modal')")
+    assert.equal(await js("document.querySelector('#refund-v2-amount').value"), '')
+    assert.equal(requests.filter(r=>r.path==='/orders/41/refunds' && r.method==='POST').length, 0)
+    window.setSize(1280, 800); await new Promise(resolve=>setTimeout(resolve,100))
+    writeFileSync(join(folder, 'refund-modal-desktop.png'), (await window.webContents.capturePage()).toPNG())
+    window.setSize(900, 600); await new Promise(resolve=>setTimeout(resolve,100))
+    writeFileSync(join(folder, 'refund-modal-900x600.png'), (await window.webContents.capturePage()).toPNG())
+    await fill('refund-v2-amount', '23.98')
+    await js("(()=>{const s=document.getElementById('refund-v2-reason');s.value='FAULTY';s.dispatchEvent(new Event('change',{bubbles:true}))})()")
+    await js("(()=>{const input=document.getElementById('refund-v2-note');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(input,'Runtime test');input.dispatchEvent(new Event('input',{bubbles:true}))})()")
+    await js("document.querySelector('button[form=refund-v2-form]').click()")
+    await until("document.body.textContent.includes('Review before refunding')")
+    assert.equal(requests.filter(r=>r.path==='/orders/41/refunds' && r.method==='POST').length, 0)
+    const submitButton="[...document.querySelectorAll('.refund-v2__footer button')].find(b=>b.textContent.includes('Refund £23.98'))"
+    await until(submitButton)
+    await js(`(${submitButton}).click();(${submitButton}).click()`)
+    await until("document.body.textContent.includes('Refund pending')")
+    assert.equal((await js('window.adminOperations.pending()'))[0].state, 'confirmed')
+    const refundRequests=requests.filter(r=>r.path==='/orders/41/refunds' && r.method==='POST')
+    assert.equal(refundRequests.length, 1)
+    assert.equal(refundRequests[0].body.amount, 23.98)
+    assert.equal(refundRequests[0].body.reason, 'BB-R-41 — Faulty — Runtime test')
+    assert.match(refundRequests[0].key, /^[0-9a-f-]{36}$/)
+    assert.equal(requests.filter(r=>r.path==='/admin/payment-environment').every(r=>r.method==='GET'), true)
+    assert.equal(requests.some(r=>r.path.includes('secret') || r.path.includes('stripe.com')), false)
+    console.log('Verified compiled Refund V2: no payment call before explicit final confirmation; one pending fixture refund after double-click; verified TEST display; bounded 900×600 and desktop screenshots.')
+    console.log('Refund modal desktop screenshot: ' + join(folder, 'refund-modal-desktop.png'))
+    console.log('Refund modal 900x600 screenshot: ' + join(folder, 'refund-modal-900x600.png'))
     console.log('Verified compiled Returns queue/detail, permanent reference, original-order navigation both ways with filter context, instruction preview/authorisation, and receipt without refund calls.')
     console.log('Verified exact-generation cancellation/withdrawal and durable identical-key lost-response replay, whitelisted read-only financial IPC, exact major-unit amounts, fully-refunded dispatch blocking, failed history recovery, authenticated order IPC, native confirmation dialogs, security-review rejection without retry, Preparing and trusted-carrier Dispatch in compiled Electron.')
     console.log('Runtime screenshot: ' + join(folder, 'order-detail.png'))

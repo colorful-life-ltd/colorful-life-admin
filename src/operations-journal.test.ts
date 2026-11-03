@@ -31,6 +31,14 @@ it('definitive 4xx refusals such as ORDER_NOT_FOUND are rejected and finishable,
   expect(await f.service.pending()).toMatchObject([{ state: 'rejected' }])
   await f.service.finish('securityReview', security); expect(await f.service.pending()).toEqual([])
 })
+it('finishes only a locally saved rejected intent and never calls the Backend', async () => {
+  const rejected: SavedOperation = { operation: 'refund', input: refund, key: '12345678-1234-1234-1234-123456789abc', state: 'rejected' }
+  const f = fixture({ version: 2, intents: [rejected] })
+  await f.service.finish('refund', refund)
+  expect(await f.service.pending()).toEqual([])
+  expect(f.authenticatedFetch).not.toHaveBeenCalled()
+  expect(f.store.write).toHaveBeenCalledWith('https://backend.test|2', null)
+})
 it('records an audited investigated outcome for an uncertain non-replayable intent and clears only that slot', async () => {
   const f = fixture(); f.authenticatedFetch.mockRejectedValueOnce(new Error('lost')).mockRejectedValueOnce(new Error('lost'))
   await expect(f.service.execute('securityReview', security)).rejects.toThrow()
@@ -62,6 +70,26 @@ it('keeps uncertain financial intents fail-closed: no operator decision, same-ke
   const keys = f.authenticatedFetch.mock.calls.map(([, init]) => init.headers['Idempotency-Key'])
   expect(keys).toHaveLength(2); expect(keys[0]).toBe(keys[1])
 })
+it('retains an uncertain refund across service restart and retries with its original key', async () => {
+  const f = fixture(); f.authenticatedFetch.mockRejectedValueOnce(new Error('lost response'))
+  await expect(f.service.execute('refund', refund)).rejects.toThrow()
+  const original = (await f.service.pending())[0].key
+  const restarted = new OperationsService({
+    restore: vi.fn().mockResolvedValue({ user: { id: 2, role: 'ADMIN' } }),
+    authenticatedFetch: f.authenticatedFetch,
+  }, f.store, 'https://backend.test')
+  expect(await restarted.pending()).toMatchObject([{ state: 'uncertain', key: original }])
+  f.authenticatedFetch.mockResolvedValueOnce(json({ refundId: 3, status: 'PROCESSING', amount: '5.00', currency: 'GBP', provider: 'STRIPE' }, 202))
+  await restarted.execute('refund', refund)
+  expect(f.authenticatedFetch.mock.calls.at(-1)![1].headers['Idempotency-Key']).toBe(original)
+})
+it('never resubmits a previously confirmed refund; its key and confirmed state are unchanged and no request is sent', async () => {
+  const confirmed: SavedOperation = { operation: 'refund', input: refund, key: '12345678-1234-1234-1234-123456789abc', state: 'confirmed' }
+  const f = fixture({ version: 2, intents: [confirmed] })
+  await expect(f.service.execute('refund', refund)).rejects.toThrow('a confirmed refund is never submitted again')
+  expect(f.authenticatedFetch).not.toHaveBeenCalled()
+  expect(await f.service.pending()).toEqual([confirmed])
+})
 it('migrates a version 1 single-intent journal without dropping its uncertainty', async () => {
   const legacy: SavedOperation = { operation: 'securityReview', input: security, key: '5b2c3a4e-1111-4222-8333-944455556666', state: 'uncertain' }
   const f = fixture(legacy)
@@ -90,9 +118,39 @@ it('refund intents share an order slot by design: one Payment per Order, so paym
   // An uncertain refund keeps every other refund intent for that order fail-closed, whatever paymentId is entered.
   await expect(f.service.execute('refund', { ...refund, paymentId: 8 })).rejects.toThrow('saved intent exists')
   expect(f.authenticatedFetch).toHaveBeenCalledTimes(1)
-  // A wrong payment for the order is a definitive Backend refusal, then finishable.
-  const g = fixture(); g.authenticatedFetch.mockResolvedValueOnce(json({ error: 'Payment not found for order' }, 404))
+  // A pre-submission refusal retains the key until the server durably retires it.
+  const g = fixture(); g.authenticatedFetch.mockImplementationOnce(async (_path,init) => json({ error: 'REFUND_CAPACITY_EXCEEDED', refundSubmissionDisposition: 'NOT_SUBMITTED', refundRequestKey: init.headers['Idempotency-Key'] }, 409))
   await expect(g.service.execute('refund', { ...refund, paymentId: 8 })).rejects.toThrow()
-  expect(await g.service.pending()).toMatchObject([{ state: 'rejected' }])
-  await g.service.finish('refund', { ...refund, paymentId: 8 }); expect(await g.service.pending()).toEqual([])
+  const saved=(await g.service.pending())[0]
+  expect(saved).toMatchObject({state:'uncertain',input:{...refund,paymentId:8}})
+  await expect(g.service.execute('refund',{...refund,paymentId:8,amount:4.99})).rejects.toThrow('saved intent exists')
+  g.authenticatedFetch.mockResolvedValueOnce(json({state:'RETIRED',requestKey:saved.key}))
+  await g.service.finishUnsubmittedRefund(saved.input,saved.key)
+  g.authenticatedFetch.mockResolvedValueOnce(json({ refundId: 6, status: 'PROCESSING', amount: '5.00', currency: 'GBP', provider: 'STRIPE' }, 202))
+  await g.service.execute('refund', { ...refund, paymentId: 8, amount: 4.99 })
+  const keys = g.authenticatedFetch.mock.calls.map(([, init]) => init.headers['Idempotency-Key'])
+  expect(keys).toHaveLength(3); expect(keys[0]).toBe(saved.key); expect(keys[1]).toBe(saved.key); expect(keys[2]).not.toBe(saved.key)
+})
+it('does not infer a definitive refund rejection from 4xx status and keeps the saved intent', async () => {
+  const f = fixture(); f.authenticatedFetch.mockResolvedValueOnce(json({ error: 'REFUND_CAPACITY_EXCEEDED' }, 409))
+  await expect(f.service.execute('refund', refund)).rejects.toThrow()
+  expect(await f.service.pending()).toMatchObject([{ operation: 'refund', state: 'uncertain', input: refund }])
+  await expect(f.service.execute('refund', { ...refund, amount: 4.99 })).rejects.toThrow('saved intent exists')
+  expect(f.authenticatedFetch).toHaveBeenCalledOnce()
+})
+it('retains a definitively unsubmitted £23.99 key until retirement before correction to £23.98', async () => {
+  const f = fixture()
+  const order11 = { orderId: 11, paymentId: 9, amount: 23.99, reason: 'BB-R-11 — Faulty' }
+  f.authenticatedFetch.mockImplementationOnce(async (_path,init) => json({ error: 'REFUND_CAPACITY_EXCEEDED', refundSubmissionDisposition: 'NOT_SUBMITTED', refundRequestKey: init.headers['Idempotency-Key'] }, 409))
+  await expect(f.service.execute('refund', order11)).rejects.toThrow()
+  const saved=(await f.service.pending())[0]
+  expect(saved).toMatchObject({state:'uncertain',input:order11})
+  f.authenticatedFetch.mockResolvedValueOnce(json({state:'RETIRED',requestKey:saved.key}))
+  await f.service.finishUnsubmittedRefund(saved.input,saved.key)
+  expect(await f.service.pending()).toEqual([])
+  f.authenticatedFetch.mockResolvedValueOnce(json({ refundId: 12, status: 'PROCESSING', amount: '23.98', currency: 'GBP', provider: 'STRIPE' }, 202))
+  await f.service.execute('refund', { ...order11, amount: 23.98 })
+  expect(f.authenticatedFetch.mock.calls[1][0]).toBe('/orders/11/payments/9/refund-request-retirement')
+  expect(JSON.parse(f.authenticatedFetch.mock.calls[2][1].body)).toMatchObject({ amount: 23.98 })
+  expect(await f.service.pending()).toMatchObject([{ state: 'confirmed', input: { amount: 23.98 } }])
 })
