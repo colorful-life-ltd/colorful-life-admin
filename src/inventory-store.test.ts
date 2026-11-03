@@ -11,7 +11,14 @@ function root() { const p = fs.mkdtempSync(join(tmpdir(), 'inventory-durability-
 it('flushes a same-directory exclusive temporary file before rename and directory flush, including tombstone deletion', () => {
   const directory = root(), events: string[] = []
   const io = { ...fs, writeFileSync: ((...args: Parameters<typeof fs.writeFileSync>) => { events.push('write'); fs.writeFileSync(...args) }) as typeof fs.writeFileSync,
-    fsyncSync: (fd: number) => { events.push(fs.fstatSync(fd).isDirectory() ? 'directory flush' : 'file flush'); fs.fsyncSync(fd) },
+    fsyncSync: (fd: number) => {
+      const directoryDescriptor = fs.fstatSync(fd).isDirectory()
+      events.push(directoryDescriptor ? 'directory flush' : 'file flush')
+      // Windows may not support fsync on directory handles. Simulate that flush
+      // in this cross-platform ordering test, but always fsync the actual file.
+      if (directoryDescriptor && process.platform === 'win32') return
+      fs.fsyncSync(fd)
+    },
     renameSync: (a: fs.PathLike, b: fs.PathLike) => { expect(String(a)).toMatch(/\.tmp$/); expect(String(a).startsWith(directory)).toBe(true); events.push('rename'); fs.renameSync(a, b) } }
   const store = new FileShipmentStore(directory, () => true, { io, platform: 'linux' })
   store.write('scope', value); expect(events).toEqual(['write', 'file flush', 'rename', 'directory flush']); expect(store.read('scope')).toEqual(value)
