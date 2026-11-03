@@ -634,3 +634,13 @@ it('keeps a verified RETIRED result when the following gate refresh fails, and k
   expect(within(dialog).getByRole('button', { name: 'Continue' })).toBeDisabled()
   expect(window.adminOperations.execute).not.toHaveBeenCalled()
 })
+it.each([
+  ['failed', { mode: 'direct', state: 'failed', message: 'Connection failed' }],
+  ['connecting', { mode: 'direct', state: 'connecting', message: 'Connecting securely to the Backend' }],
+  ['missing message', { mode: 'direct', state: 'connected' }],
+] as const)('blocks a LIVE refund when the direct connection is %s and never submits', async (_label, status) => {
+  const dialog = await openRefundWith('LIVE', status)
+  expect(await within(dialog).findByText('LIVE Stripe requires a verified direct Admin connection. New refund submission is blocked.')).toBeInTheDocument()
+  expect(within(dialog).getByRole('button', { name: 'Continue' })).toBeDisabled()
+  expect(window.adminOperations.execute).not.toHaveBeenCalled()
+})

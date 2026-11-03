@@ -18,20 +18,37 @@ it.each([
   expect(stripeEnvironmentMismatch(environment, mode)).toBe(blocked)
 })
 
+const connected = { state: 'connected', message: 'ok' } as const
 it.each([
-  [{ mode: 'direct', state: 'connected', message: 'ok' }, 'direct'],
-  [{ mode: 'remote-sandbox', state: 'connected', message: 'ok' }, 'remote-sandbox'],
-  [{ state: 'connected', message: 'ok' }, null],
-  [{ mode: undefined }, null],
-  [{ mode: null }, null],
-  [{ mode: 'Direct' }, null],
-  [{ mode: 'direct ' }, null],
-  [{ mode: 'remote_sandbox' }, null],
+  [{ mode: 'direct', ...connected }, 'direct'],
+  [{ mode: 'remote-sandbox', ...connected }, 'remote-sandbox'],
+  [{ ...connected }, null],
+  [{ mode: undefined, ...connected }, null],
+  [{ mode: null, ...connected }, null],
+  [{ mode: 'Direct', ...connected }, null],
+  [{ mode: 'direct ', ...connected }, null],
+  [{ mode: 'remote_sandbox', ...connected }, null],
   [null, null],
   [undefined, null],
   ['direct', null],
-  [[{ mode: 'direct' }], null],
+  [[{ mode: 'direct', ...connected }], null],
 ] as const)('accepts only an exact reported connection mode: %j -> %s', (status, expected) => {
+  expect(parseConnectionMode(status)).toBe(expected)
+})
+
+it.each([
+  ['connected direct', { mode: 'direct', state: 'connected', message: 'Direct Backend connection configured.' }, 'direct'],
+  ['connected remote-sandbox', { mode: 'remote-sandbox', state: 'connected', message: 'Secure Backend connection is ready.' }, 'remote-sandbox'],
+  ['failed direct', { mode: 'direct', state: 'failed', message: 'Connection failed' }, null],
+  ['failed remote-sandbox', { mode: 'remote-sandbox', state: 'failed', message: 'Connection failed' }, null],
+  ['connecting direct', { mode: 'direct', state: 'connecting', message: 'Connecting securely to the Backend' }, null],
+  ['connecting remote-sandbox', { mode: 'remote-sandbox', state: 'connecting', message: 'Connecting securely to the Backend' }, null],
+  ['missing state', { mode: 'direct', message: 'Direct' }, null],
+  ['unknown state', { mode: 'direct', state: 'CONNECTED', message: 'Direct' }, null],
+  ['missing message', { mode: 'direct', state: 'connected' }, null],
+  ['non-string message', { mode: 'direct', state: 'connected', message: 42 }, null],
+  ['null message', { mode: 'direct', state: 'connected', message: null }, null],
+] as const)('accepts a mode only from a complete connected status: %s', (_label, status, expected) => {
   expect(parseConnectionMode(status)).toBe(expected)
 })
 

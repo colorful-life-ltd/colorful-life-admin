@@ -145,3 +145,13 @@ it.each([
  await waitFor(()=>expect(screen.getByRole('alert')).toHaveTextContent(/verified direct Admin connection/))
  expect(api.execute).not.toHaveBeenCalled()
 })
+it.each([
+ ['failed',{mode:'direct',state:'failed',message:'Connection failed'}],
+ ['connecting',{mode:'direct',state:'connecting',message:'Connecting securely to the Backend'}],
+] as const)('blocks a standalone LIVE refund when the direct connection is %s',async(_label,status)=>{
+ prepareRefundWorkflow('LIVE')
+ vi.mocked(window.adminConnection!.status).mockResolvedValue(status as never)
+ fireEvent.click(screen.getByRole('button',{name:'Initiate refund'}))
+ await waitFor(()=>expect(screen.getByRole('alert')).toHaveTextContent(/verified direct Admin connection/))
+ expect(api.execute).not.toHaveBeenCalled()
+})

@@ -5,12 +5,15 @@ import type { ReturnCaseView } from '../electron/return-contract'
 export type ConnectionMode = 'direct' | 'remote-sandbox'
 
 /**
- * Accept only an exact Admin connection-mode report; anything missing or malformed is
- * unverified (null). Never infer the mode from a URL and never default to a permissive mode.
+ * Accept a mode only from a complete, connected ConnectionStatus (electron/connection-contract.ts):
+ * a non-array object with state 'connected', a string message and an exact mode. Anything else,
+ * including a connecting or failed connection, is unverified (null). Never infer the mode from a
+ * URL and never default to a permissive mode.
  */
 export function parseConnectionMode(status: unknown): ConnectionMode | null {
   if (!status || typeof status !== 'object' || Array.isArray(status)) return null
-  const mode = (status as Record<string, unknown>).mode
+  const { mode, state, message } = status as Record<string, unknown>
+  if (state !== 'connected' || typeof message !== 'string') return null
   return mode === 'direct' || mode === 'remote-sandbox' ? mode : null
 }
 
