@@ -15,6 +15,16 @@ const label = (v: string | null) => v ? v.toLowerCase().replaceAll('_', ' ').rep
 const date = (v: string) => new Date(v).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
 const money = (v: string, currency: string) => new Intl.NumberFormat('en-GB', { style: 'currency', currency }).format(Number(v))
 const message = (e: unknown) => e instanceof Error ? e.message : 'The order request failed. Please try again.'
+const stageTone = (stage: string | null) => stage === 'DELIVERED' ? 'done' : stage === 'DISPATCHED' || stage === 'IN_TRANSIT' ? 'active' : stage === 'PREPARING' || stage === 'CONFIRMED' ? 'todo' : 'muted'
+/** One sentence telling the operator what to do next, derived only from the order's reported state. */
+const nextStep = (o: OrderDetail, blocked: boolean) => {
+  if (blocked && canFulfil(o)) return 'Preparing and shipping are blocked: resolve the payment or refund warning under Payment and refunds below first.'
+  if (canFulfil(o)) return o.fulfilmentStage === 'CONFIRMED' ? 'Paid and ready. Mark as Preparing when you start packing, then Confirm Shipment with the carrier and tracking number.' : 'Being prepared. When the parcel is handed to the carrier, Confirm Shipment with the tracking number and actual cost.'
+  if (canMarkDelivered(o)) return 'Dispatched. When the carrier’s tracking website shows the parcel as delivered, Mark as Delivered.'
+  if (o.fulfilment.stage === 'DELIVERED') return 'Delivered. No further fulfilment action is needed.'
+  if (canCancel(o)) return 'Not paid yet. Wait for payment, or cancel the order if it cannot be fulfilled.'
+  return 'No fulfilment action is available for this order.'
+}
 
 const readFinancials = async (id: number): Promise<OrderFinancials> => {
   try { return await adminOrders.financials(id) }
@@ -145,9 +155,20 @@ export default function Orders({ sessionBlocked = false, initialOrderId = null, 
       <nav className="order-actions" aria-label="Order pages"><button className="button button-secondary" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Previous</button><span>Page {result.pagination.page} of {Math.max(1, result.pagination.totalPages)} · {result.pagination.totalItems} orders</span><button className="button button-secondary" disabled={page >= result.pagination.totalPages || page >= 10000} onClick={() => setPage(p => p + 1)}>Next</button></nav>
     </>}
     {!loading && order && <>
-      <button className="button button-primary" disabled={pending} onClick={()=>onViewReturns?.(order.id)}>View Returns</button>
       <p>{order.user.email} · Placed {date(order.createdAt)}</p>
-      <dl><dt>Order status</dt><dd>{label(order.status)}</dd><dt>Payment</dt><dd>{label(order.paymentStatus)}{order.payment?.paidAt && ` · ${date(order.payment.paidAt)}`}</dd><dt>Fulfilment</dt><dd>{label(order.fulfilmentStage)}</dd><dt>Total</dt><dd>{money(order.totalAmount, order.currency)} {order.currency}</dd></dl>
+      <dl><dt>Order status</dt><dd>{label(order.status)}</dd><dt>Payment</dt><dd>{label(order.paymentStatus)}{order.payment?.paidAt && ` · ${date(order.payment.paidAt)}`}</dd><dt>Fulfilment</dt><dd><span className={`status-pill status-pill--${stageTone(order.fulfilmentStage)}`}>{label(order.fulfilmentStage)}</span></dd><dt>Total</dt><dd>{money(order.totalAmount, order.currency)} {order.currency}</dd></dl>
+      {/* Next step first: the fulfilment actions used every day, with the reason when they are blocked. */}
+      <section className="next-step" aria-labelledby="next-step-title">
+        <h3 id="next-step-title">Next step</h3>
+        <p>{nextStep(order, !!financialWarning)}</p>
+        <div className="order-actions">
+          {canFulfil(order) && order.fulfilmentStage === 'CONFIRMED' && <button className="button button-primary" disabled={pending || !!financialWarning} onClick={() => { setError(''); setAction('preparing') }}>Mark as Preparing</button>}
+          {canFulfil(order) && <button className="button button-primary" disabled={pending || !!financialWarning} onClick={() => { setError(''); setAction('dispatch'); setTracking(''); setCost(''); setApprovedPence(null) }}>Confirm Shipment</button>}
+          {canMarkDelivered(order) && <button className="button button-primary" disabled={pending} onClick={() => { setError(''); setDeliveryChecked(false); setAction('delivered') }}>Mark as Delivered</button>}
+          {canCancel(order) && <button className="button button-secondary" disabled={pending} onClick={() => { setError(''); setAction('cancel') }}>Cancel Order</button>}
+        </div>
+        <button className="button button-secondary" disabled={pending} onClick={()=>onViewReturns?.(order.id)}>View Returns</button>
+      </section>
       <OrderFinancialDetails data={financials} warning={financialWarning} />
       <h3>Products</h3><ul>{order.orderItems.map(i => <li key={i.id}>{i.productListing.legoProduct.setNumber} · {i.productListing.legoProduct.title} · {label(i.productListing.condition)}<br />{i.quantity} × {money(i.unitPrice, order.currency)} = {money(i.lineTotal, order.currency)}</li>)}</ul>
       <h3>Shipping address</h3><address>{order.deliveryRecipientName}<br />{order.deliveryLine1}<br />{order.deliveryLine2 && <>{order.deliveryLine2}<br /></>}{order.deliveryCity}<br />{order.deliveryCounty && <>{order.deliveryCounty}<br /></>}{order.deliveryPostcode}<br />{order.deliveryCountryCode}{order.deliveryPhone && <><br />{order.deliveryPhone}</>}</address>
@@ -155,12 +176,6 @@ export default function Orders({ sessionBlocked = false, initialOrderId = null, 
       {order.actualShippingCost !== null && <p>Actual shipping cost: {money(order.actualShippingCost, order.currency)}</p>}
       <h3>Fulfilment history</h3>{order.fulfilmentEvents.length || order.deliveryConfirmations?.length ? <ol>{order.fulfilmentEvents.map(e => <li key={e.id}>{label(e.action)} · {label(e.fromStage)} → {label(e.toStage)}<br />{date(e.createdAt)} · {e.performedByUser.email} · {label(e.source)}</li>)}{order.deliveryConfirmations?.map(d => <li key={`delivered-${d.shipmentId}`}>Delivered · Dispatched → Delivered{d.shipmentSequence !== null && ` · Shipment ${d.shipmentSequence}`}<br />{date(d.confirmedAt)} · {d.performedByUser?.email ?? 'Unknown operator'} · Manual confirmation (carrier website checked)</li>)}</ol> : <p>No fulfilment history recorded.</p>}
       {window.adminOperations && <Operations key={order.id} orderId={order.id} sessionBlocked={pending} onViewReturns={onViewReturns} />}
-      <div className="order-actions">
-        {canFulfil(order) && order.fulfilmentStage === 'CONFIRMED' && <button className="button button-primary" disabled={pending || !!financialWarning} onClick={() => { setError(''); setAction('preparing') }}>Mark as Preparing</button>}
-        {canFulfil(order) && <button className="button button-primary" disabled={pending || !!financialWarning} onClick={() => { setError(''); setAction('dispatch'); setTracking(''); setCost(''); setApprovedPence(null) }}>Confirm Shipment</button>}
-        {canMarkDelivered(order) && <button className="button button-primary" disabled={pending} onClick={() => { setError(''); setDeliveryChecked(false); setAction('delivered') }}>Mark as Delivered</button>}
-        {canCancel(order) && <button className="button button-secondary" disabled={pending} onClick={() => { setError(''); setAction('cancel') }}>Cancel Order</button>}
-      </div>
       {order.payment !== null && <p>Paid cancellation and refund controls are available below in Operator workflows.</p>}
     </>}
     <dialog ref={dialog} className="order-dialog" aria-labelledby={approvalFor !== null ? 'shipping-approval-title' : 'order-confirm-title'} aria-describedby={approvalFor !== null ? 'shipping-approval-text' : undefined}

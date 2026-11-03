@@ -1,6 +1,6 @@
 import {returnCase,returnQueue} from './test-fixtures/returns'
 import {order,orderPage,financials} from './test-fixtures/order'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
@@ -41,6 +41,21 @@ describe('App authentication flow', () => {
       createUsedOffer: vi.fn(),
     }
     window.adminCategories = { list: vi.fn().mockResolvedValue([{ id: 4, name: 'City', subtitle: null, description: null, imageUrl: null, imagePublicId: null, thumbnailUrl: null, thumbnailPublicId: null }]), getProductAvailability: vi.fn().mockResolvedValue({ totalProducts: 0, totalInventory: 0, activeProducts: 0, inactiveProducts: 0 }), create: vi.fn(), update: vi.fn(), uploadArtwork: vi.fn(), removeArtwork: vi.fn(), uploadThumbnailArtwork: vi.fn(), removeThumbnailArtwork: vi.fn() }
+  })
+
+  it('groups the navigation by job and marks the current section', async()=>{
+    window.adminAuth.restore=vi.fn().mockResolvedValue(adminSession)
+    window.adminReturns={list:vi.fn().mockResolvedValue(returnQueue),get:vi.fn().mockResolvedValue(returnCase),action:vi.fn()}
+    window.adminOrders={list:vi.fn().mockResolvedValue(orderPage),get:vi.fn().mockResolvedValue(order),financials:vi.fn().mockResolvedValue(financials),paymentEnvironment:vi.fn().mockResolvedValue({stripeEnvironment:'TEST',refundReconciliationEnabled:true}),preparing:vi.fn(),dispatch:vi.fn(),delivered:vi.fn(),cancel:vi.fn()}
+    window.adminConnection={status:vi.fn().mockResolvedValue({mode:'direct',state:'connected',message:'Direct connection'}),retry:vi.fn()}
+    render(<App />)
+    const nav = await screen.findByRole('navigation', { name: 'Admin sections' })
+    expect(within(nav).getAllByRole('group').map(g => g.getAttribute('aria-label'))).toEqual(['Daily operations', 'Catalogue', 'Stock'])
+    expect(within(within(nav).getByRole('group', { name: 'Daily operations' })).getAllByRole('button').map(b => b.textContent)).toEqual(['Orders', 'Returns', 'Operator workflows'])
+    expect(within(nav).getByRole('button', { name: 'Products' })).toHaveAttribute('aria-current', 'page')
+    fireEvent.click(within(nav).getByRole('button', { name: 'Orders' }))
+    expect(within(nav).getByRole('button', { name: 'Orders' })).toHaveAttribute('aria-current', 'page')
+    expect(within(nav).getByRole('button', { name: 'Products' })).not.toHaveAttribute('aria-current')
   })
 
   it('opens Returns and navigates to the exact original order and back through the real workspace', async()=>{
