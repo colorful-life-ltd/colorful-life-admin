@@ -1,4 +1,5 @@
 import type { BrowserWindow, IpcMainInvokeEvent } from 'electron'
+import { pathToFileURL } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { validateBackendUrl } from '../electron/backend-url'
 import { assertTrustedSender, guardRendererNavigation, isTrustedRenderer, secureIpcHandler, trustedRendererUrl } from '../electron/renderer-security'
@@ -17,11 +18,12 @@ describe('Backend URL policy', () => {
   })
 })
 
-const trusted = 'file:///app/dist/index.html'
+const rendererEntry = '/app/dist/index.html'
+const trusted = pathToFileURL(rendererEntry).href
 describe('renderer document trust', () => {
   it('allows the packaged entry, reloads and fragment navigation', () => {
-    expect(trustedRendererUrl('/app/dist/index.html', undefined, true)).toBe(trusted)
-    expect(trustedRendererUrl('/app/dist/index.html', trusted, false)).toBe(trusted)
+    expect(trustedRendererUrl(rendererEntry, undefined, true)).toBe(trusted)
+    expect(trustedRendererUrl(rendererEntry, trusted, false)).toBe(trusted)
     expect(isTrustedRenderer(trusted, trusted)).toBe(true)
     expect(isTrustedRenderer(`${trusted}#orders`, trusted)).toBe(true)
     expect(isTrustedRenderer('http://127.0.0.1:5173/#orders', 'http://127.0.0.1:5173/')).toBe(true)
