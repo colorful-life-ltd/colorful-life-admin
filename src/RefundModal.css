@@ -105,11 +105,9 @@
 .refund-v2__form textarea { min-height: 72px; resize: vertical; }
 .refund-v2__form p { margin: 0; color: #526253; font-size: .92rem; }
 .refund-v2__fill-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.refund-v2__fill-actions .button { min-height: 40px; }
 .refund-v2__live-confirm { display: flex; align-items: flex-start; gap: 12px; margin: 16px 0; padding: 13px; border-radius: 9px; background: #fff0d2; line-height: 1.45; }
 .refund-v2__live-confirm input { width: 22px; height: 22px; min-width: 22px; margin: 0; accent-color: #2f6b4f; }
 .refund-v2__footer { flex: 0 0 auto; justify-content: flex-end; border-top: 1px solid #dbe2d7; box-shadow: 0 -6px 16px #17271c0a; }
-.refund-v2__footer .button { min-height: 44px; }
 .refund-v2 button:focus-visible,
 .refund-v2 input:focus-visible,
 .refund-v2 select:focus-visible,

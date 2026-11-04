@@ -6,7 +6,6 @@
 .product-editor-search { display: grid; gap: 7px; }
 .product-editor-search > label, .product-editor-form > label { display: grid; gap: 6px; margin: 0; color: #415049; font-size: 13px; font-weight: 650; }
 .product-editor-search-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
-.product-editor-search-controls .button, .product-editor-image-actions .button, .product-editor-add-images, .product-editor-replace-image { min-height: 40px; margin: 0; font-size: 12px; }
 .product-editor-results { display: grid; gap: 8px; margin: 16px 0 0; padding: 0; list-style: none; }
 .product-editor-result { display: flex; align-items: center; justify-content: space-between; gap: 14px; width: 100%; padding: 13px 15px; color: #26342f; background: #fff; border: 1px solid var(--border); border-radius: 9px; cursor: pointer; text-align: left; }
 .product-editor-result:hover:not(:disabled), .product-editor-result-selected { border-color: var(--accent); background: #f7faf8; }
