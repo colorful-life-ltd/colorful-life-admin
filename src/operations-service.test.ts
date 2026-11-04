@@ -130,6 +130,13 @@ it('requires ADMIN and strips private provider outcomes/keys from all returned d
   expect(f.authenticatedFetch).not.toHaveBeenCalled()
   expect(safeOperationResult({refund:{id:7,amount:'5',providerReference:'SECRET',providerOutcome:{secret:'SECRET'},refundIdempotencyKey:'SECRET'},history:[{kind:'REFUND_REVIEW',details:{reason:'Investigated evidence',apiKey:'SECRET'}}]})).toEqual({refund:{id:7,amount:'5'},history:[{kind:'REFUND_REVIEW',details:{reason:'Investigated evidence'}}]})
 })
+it('shows sanitized unresolved Stripe reconciliation from payment security and drops anything unlisted',()=>{
+  const entry={receiptId:'91',provider:'STRIPE',eventType:'payment_intent.succeeded',receivedAt:'2026-11-04T12:00:00.000Z',processedAt:'2026-11-04T12:00:01.000Z',
+    kind:'INVENTORY_RECONCILIATION_REQUIRED',action:'Check stock for the order items, then confirm or refund it.',processingError:'Captured payment requires manual inventory reconciliation; financial success retained',
+    orderId:41,orderStatus:'PENDING',paymentId:7,paymentStatus:'SUCCEEDED',paymentIntentId:'pi_123',amount:'20.00',currency:'GBP'}
+  expect(safeOperationResult({policies:[],reviews:[],reconciliation:[{...entry,clientSecret:'SECRET',idempotencyKey:'SECRET',customerEmail:'SECRET'}]}))
+    .toEqual({policies:[],reviews:[],reconciliation:[entry]})
+})
 it('validates the IPC boundary and registers no arbitrary URL operation',()=>{
  const handlers=new Map<string, (...args:unknown[])=>unknown>(),f=fixture()
  registerOperationsIpc((channel,handler)=>handlers.set(channel,handler),f.service)
