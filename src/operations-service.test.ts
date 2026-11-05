@@ -177,3 +177,11 @@ it('keeps the uncertain refund and its original key when a network failure is fo
   const keys=f.authenticatedFetch.mock.calls.map(call=>(call[1] as {headers:Record<string,string>}).headers['Idempotency-Key'])
   expect(keys).toEqual([first.key,first.key])
 })
+it('offers only Stripe for provider initiation policy and refuses a retired PayPal policy before I/O',async()=>{
+  const policy={enabled:true,capacity:null,note:'Owner-approved Stripe capacity review'}
+  expect(validateOperationInput('providerPolicy',{...policy,provider:'STRIPE'})).toMatchObject({provider:'STRIPE'})
+  expect(()=>validateOperationInput('providerPolicy',{...policy,provider:'PAYPAL'})).toThrow()
+  const f=fixture()
+  await expect(f.service.execute('providerPolicy',{...policy,provider:'PAYPAL'})).rejects.toThrow()
+  expect(f.authenticatedFetch).not.toHaveBeenCalled();expect(f.store.write).not.toHaveBeenCalled()
+})
