@@ -185,3 +185,7 @@ form > .button-primary { margin-top: 17px; }
 .connection-panel p { margin: .25rem 0; }
 .connection-panel-compact { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: .5rem .875rem; font-size: 13px; }
 .connection-panel-failed { border-color: #e3b9b9; background: #fdf3f3; color: #7a2e2e; } .connection-panel-compact .button { flex: 0 0 auto; min-height: 34px; margin: 0; padding: 0 14px; font-size: 12px; }
+/* Production identification: persistent, high-contrast, cannot be dismissed. */
+.production-banner { position: sticky; top: 0; z-index: 1000; grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; gap: 12px; padding: .5rem 1rem; background: #b3261e; color: #fff; font-size: 14px; letter-spacing: .02em; border-bottom: 3px solid #7a1912; }
+.production-banner strong { font-size: 16px; letter-spacing: .12em; }
+.connection-panel-production { border-color: #e3b9b9; background: #fdf3f3; color: #7a2e2e; }

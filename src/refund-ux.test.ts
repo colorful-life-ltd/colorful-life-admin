@@ -54,5 +54,5 @@ it.each([
 
 it('explains why a LIVE refund is blocked without implying an unverified mode is a Sandbox', () => {
   expect(liveConnectionBlockMessage('remote-sandbox')).toMatch(/Sandbox is connected to a LIVE Stripe environment/)
-  expect(liveConnectionBlockMessage(null)).toMatch(/verified direct Admin connection/)
+  expect(liveConnectionBlockMessage(null)).toMatch(/verified Production or direct Admin connection/)
 })

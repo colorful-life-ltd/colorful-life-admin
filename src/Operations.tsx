@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { adminOperations } from './admin-api'
 import { adminOrders, adminConnection } from './admin-api'
 import { financialHundredths, formatFinancialAmount } from '../electron/order-financials'
-import { liveConnectionBlockMessage, parseConnectionMode, stripeEnvironmentMismatch } from './refund-ux'
+import { liveConnectionBlockMessage, parseConnectionMode, stripeEnvironmentMismatch, type ConnectionMode } from './refund-ux'
 import type { PaymentEnvironment } from '../electron/payment-environment'
 import { operations, type Field, type InvestigationDecision, type Operation, type OperationSpec, type OperatorInput, type SafeValue, type SavedOperation } from '../electron/operations-contract'
 const message = (e: unknown) => e instanceof Error ? e.message : 'Operator request failed. Refresh authoritative history.'
@@ -57,7 +57,7 @@ export default function Operations({ sessionBlocked = false, orderId, listingId,
       const order = input.orderId, paymentId = input.paymentId, amountText = values.amount ?? ''
       if (typeof order !== 'number' || typeof paymentId !== 'number' || !/^(0|[1-9]\d{0,9})(\.\d{1,2})?$/.test(amountText)) { setError('Enter a valid order, payment and amount before reviewing this refund.'); return }
       let environment: PaymentEnvironment, financial
-      let connectionMode: 'direct'|'remote-sandbox'|null
+      let connectionMode: ConnectionMode|null
       try {
         const [envResult, financeResult, connectionResult] = await Promise.all([
           adminOrders.paymentEnvironment(), adminOrders.financials(order), adminConnection?.status?.() ?? Promise.resolve(null),

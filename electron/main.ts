@@ -84,6 +84,7 @@ handleIpc('admin-auth:request-password-reset', async (_event, email: unknown) =>
 
 handleIpc('admin-connection:status', () => connection.status())
 handleIpc('admin-connection:retry', () => connection.retry())
+handleIpc('admin-connection:confirm-production', () => connection.confirmProduction())
 
 handleIpc('admin-auth:restore', () => authService.restore())
 handleIpc('admin-auth:renew', () => authService.renewSession())

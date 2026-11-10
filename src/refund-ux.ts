@@ -2,7 +2,8 @@ import { financialHundredths } from '../electron/order-financials'
 import type { OrderDetail } from '../electron/order-contract'
 import type { ReturnCaseView } from '../electron/return-contract'
 
-export type ConnectionMode = 'direct' | 'remote-sandbox'
+import type { ConnectionMode } from '../electron/connection-contract'
+export type { ConnectionMode }
 
 /**
  * Accept a mode only from a complete, connected ConnectionStatus (electron/connection-contract.ts):
@@ -14,22 +15,24 @@ export function parseConnectionMode(status: unknown): ConnectionMode | null {
   if (!status || typeof status !== 'object' || Array.isArray(status)) return null
   const { mode, state, message } = status as Record<string, unknown>
   if (state !== 'connected' || typeof message !== 'string') return null
-  return mode === 'direct' || mode === 'remote-sandbox' ? mode : null
+  return mode === 'direct' || mode === 'remote-sandbox' || mode === 'remote-production' ? mode : null
 }
 
 /**
- * A LIVE (real-money) refund requires an explicitly verified direct Admin connection.
- * LIVE with a remote Sandbox, a missing or a malformed connection mode fails closed.
- * TEST and UNKNOWN environments are gated separately by the caller.
+ * A LIVE (real-money) refund requires an explicitly verified Production tunnel or direct Admin connection.
+ * LIVE with a remote Sandbox, a missing or a malformed connection mode fails closed, and a Production
+ * tunnel reporting TEST Stripe is a misconfiguration that fails closed too.
+ * TEST and UNKNOWN environments are otherwise gated separately by the caller.
  */
 export function stripeEnvironmentMismatch(environment: 'TEST' | 'LIVE' | 'UNKNOWN', connectionMode: unknown): boolean {
+  if (connectionMode === 'remote-production') return environment === 'TEST'
   return environment === 'LIVE' && connectionMode !== 'direct'
 }
 
 export function liveConnectionBlockMessage(connectionMode: unknown): string {
-  return connectionMode === 'remote-sandbox'
-    ? 'Sandbox is connected to a LIVE Stripe environment. Refund is blocked.'
-    : 'LIVE Stripe refunds require a verified direct Admin connection, and the connection mode could not be verified. Refund is blocked.'
+  if (connectionMode === 'remote-sandbox') return 'Sandbox is connected to a LIVE Stripe environment. Refund is blocked.'
+  if (connectionMode === 'remote-production') return 'Production is reporting a TEST Stripe environment. Refund is blocked.'
+  return 'LIVE Stripe refunds require a verified Production or direct Admin connection, and the connection mode could not be verified. Refund is blocked.'
 }
 
 export function refundInputCents(value: string): bigint | null {

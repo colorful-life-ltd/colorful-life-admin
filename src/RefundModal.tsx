@@ -6,6 +6,7 @@ import type { OrderDetail } from '../electron/order-contract'
 import type { ReturnCaseView } from '../electron/return-contract'
 import type { Operation, OperatorInput, SafeValue, SavedOperation } from '../electron/operations-contract'
 import type { PaymentEnvironment } from '../electron/payment-environment'
+import type { ConnectionMode } from './refund-ux'
 import { clampRefundCents, completedReturnedItemsCents, liveConnectionBlockMessage, orderDeliveryChargeCents, parseConnectionMode, refundCentsText, refundInputCents, stripeEnvironmentMismatch } from './refund-ux'
 import './RefundModal.css'
 
@@ -30,7 +31,7 @@ function safeValueText(value: SafeValue, depth = 0): string {
   if (Array.isArray(value)) return value.map(v => safeValueText(v, depth + 1)).join(', ')
   return Object.entries(value).map(([key, item]) => `${key.replaceAll('_', ' ')}: ${safeValueText(item, depth + 1)}`).join(' · ')
 }
-function refundGate(financials: OrderFinancials | null, environment: PaymentEnvironment | null, connectionMode: 'direct' | 'remote-sandbox' | null, sessionBlocked: boolean) {
+function refundGate(financials: OrderFinancials | null, environment: PaymentEnvironment | null, connectionMode: ConnectionMode | null, sessionBlocked: boolean) {
   const payment = financials?.payment.state === 'ready' ? financials.payment.value : null
   const refunds = financials?.refunds.state === 'ready' ? financials.refunds.value : null
   const ready = !!financials && financials.consistent && financials.payment.state === 'ready' && financials.refunds.state === 'ready'
@@ -46,7 +47,7 @@ function refundGate(financials: OrderFinancials | null, environment: PaymentEnvi
 
 export default function RefundModal({ detail, order, financials, environment, connectionMode, sessionBlocked = false, onClose, onRefresh, onOpenOperatorWorkflows }: {
   detail: ReturnCaseView; order: OrderDetail | null; financials: OrderFinancials | null; environment: PaymentEnvironment | null
-  connectionMode: 'direct' | 'remote-sandbox' | null; sessionBlocked?: boolean; onClose: () => void
+  connectionMode: ConnectionMode | null; sessionBlocked?: boolean; onClose: () => void
   onRefresh: () => Promise<void>; onOpenOperatorWorkflows: () => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null), trigger = useRef<HTMLElement | null>(null), submitting = useRef(false)
@@ -60,7 +61,7 @@ export default function RefundModal({ detail, order, financials, environment, co
   const [reviewText, setReviewText] = useState('')
   // Pence actually added by the delivery toggle (after capping); null when delivery is not included.
   const [deliveryAddedCents, setDeliveryAddedCents] = useState<bigint | null>(null)
-  const [gateSnapshot, setGateSnapshot] = useState<{financials: OrderFinancials; environment: PaymentEnvironment; connectionMode: 'direct' | 'remote-sandbox' | null} | null>(null)
+  const [gateSnapshot, setGateSnapshot] = useState<{financials: OrderFinancials; environment: PaymentEnvironment; connectionMode: ConnectionMode | null} | null>(null)
   const [gateRefreshFailed, setGateRefreshFailed] = useState(false)
   const currentFinancials = gateRefreshFailed ? null : gateSnapshot?.financials ?? financials
   const currentEnvironment = gateRefreshFailed ? null : gateSnapshot?.environment ?? environment
@@ -262,7 +263,7 @@ export default function RefundModal({ detail, order, financials, environment, co
     try { current = await refreshGates() } catch (e) { setError(e instanceof Error ? e.message : 'Refund checks could not be refreshed.'); return }
     const savedAmount = typeof saved.input.amount === 'number' ? refundInputCents(saved.input.amount.toFixed(2)) : null
     if (!current.enabled || !current.payment || saved.input.orderId !== detail.orderId || saved.input.paymentId !== current.payment.id || savedAmount === null || savedAmount > current.available) {
-      setError(current.mismatch ? (current.connectionMode === 'remote-sandbox' ? 'Sandbox is connected to LIVE Stripe. The saved refund cannot be retried.' : 'LIVE Stripe retries require a verified direct Admin connection. The saved refund cannot be retried.') : `The saved refund cannot be retried safely. Current available balance: ${formatFinancialAmount(refundCentsText(current.available < 0n ? 0n : current.available), 'GBP')}.`)
+      setError(current.mismatch ? (current.connectionMode === 'remote-sandbox' ? 'Sandbox is connected to LIVE Stripe. The saved refund cannot be retried.' : current.connectionMode === 'remote-production' ? 'Production is reporting TEST Stripe. The saved refund cannot be retried.' : 'LIVE Stripe retries require a verified Production or direct Admin connection. The saved refund cannot be retried.') : `The saved refund cannot be retried safely. Current available balance: ${formatFinancialAmount(refundCentsText(current.available < 0n ? 0n : current.available), 'GBP')}.`)
       return
     }
     setAmount(typeof saved.input.amount === 'number' ? saved.input.amount.toFixed(2) : ''); setReplaySaved(true); setLiveConfirmed(false); setPhase('confirm')
@@ -338,7 +339,7 @@ export default function RefundModal({ detail, order, financials, environment, co
       </dl>}
       {!payment && financialsReady && <p className="refund-v2__block">No payment is recorded for this order.</p>}
       <p className={`refund-v2__environment refund-v2__environment--${env.toLowerCase()}`} role="status">Stripe environment: <strong>{env}</strong>{env === 'TEST' ? ' — no real money moves.' : env === 'LIVE' ? ' — real money will be refunded.' : ' — status is unverified; refund is blocked.'}</p>
-      {mismatch && <p className="refund-v2__block" role="alert">{currentConnectionMode === 'remote-sandbox' ? 'Sandbox connection / LIVE Stripe mismatch. New refund submission is blocked.' : 'LIVE Stripe requires a verified direct Admin connection. New refund submission is blocked.'}</p>}
+      {mismatch && <p className="refund-v2__block" role="alert">{currentConnectionMode === 'remote-sandbox' ? 'Sandbox connection / LIVE Stripe mismatch. New refund submission is blocked.' : currentConnectionMode === 'remote-production' ? 'Production connection / TEST Stripe mismatch. New refund submission is blocked.' : 'LIVE Stripe requires a verified Production or direct Admin connection. New refund submission is blocked.'}</p>}
       {financialsReady && payment && payment.provider !== 'STRIPE' && <p className="refund-v2__block">This refund workflow supports verified Stripe payments only.</p>}
       {!!refunds?.length && <section className="refund-v2__records" aria-label="Order-level refund records"><h3>Recorded refunds for this order</h3><p>These records apply to the order payment. They are not allocated to individual returned items.</p><ul>{refunds.map(refund => <li key={refund.id}>
         <strong>Refund #{refund.id}: {refund.status} · {formatFinancialAmount(refund.amount, refund.currency)}</strong>

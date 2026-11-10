@@ -168,6 +168,36 @@ checks remain authoritative, including when financial state changes after a read
 Recorded refund status is displayed separately from uncertainty/review metadata.
 This screen cannot execute/reconcile refunds, release holds or change payments.
 
+## Production connection (explicit, owner-confirmed)
+
+Production uses the same owned SSM tunnel, AWS profile, instance and IAM/SSM permissions as Sandbox,
+to the Production API's loopback port on the host:
+
+```powershell
+npm ci
+npm run electron:production
+```
+
+For a packaged executable set `COLORFUL_LIFE_CONNECTION_MODE=remote-production` for that launch only.
+
+| | Sandbox (`remote-sandbox`, default) | Production (`remote-production`) |
+| --- | --- | --- |
+| Remote API port | 3001 (3002 refused) | 3002 only |
+| Local tunnel / Backend URL | 3000 → `http://localhost:3000` (3002 refused) | 3002 only → `http://localhost:3002` |
+| Selection | default | only `COLORFUL_LIFE_CONNECTION_MODE=remote-production` |
+
+- Production is never a default and never a fallback. Unknown mode spellings, the Sandbox port or any other
+  port, or a non-matching Backend URL stop startup. Direct mode also refuses loopback port 3002. The fixed
+  Production URL keeps operator and shipment journals separate from Sandbox and local development.
+- On every launch Admin starts in **awaiting confirmation**: no AWS call, tunnel or Backend request is made
+  until the owner clicks **Connect to Production**. A failure is shown as a Production failure, and Retry
+  reconnects to Production only.
+- A red **PRODUCTION** banner stays at the top of every screen, including sign-in and failures, and the
+  window title begins with `PRODUCTION`.
+- All data access remains Backend API calls through the Main process; Admin has no database connection.
+- LIVE Stripe refunds are permitted on a verified Production connection. A Production Backend reporting TEST
+  Stripe blocks refunds as a misconfiguration; Sandbox reporting LIVE remains blocked.
+
 ## Automatic remote Sandbox connection (Windows Electron)
 
 Install AWS CLI v2 and Session Manager Plugin once, and configure the existing

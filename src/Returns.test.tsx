@@ -31,7 +31,7 @@ const setup = (detail = returnCase) => {
     delivered: vi.fn(),
     cancel: vi.fn(),
   }
-  window.adminConnection = { status: vi.fn().mockResolvedValue({ mode: 'remote-sandbox', state: 'connected', message: 'Connected' }), retry: vi.fn() }
+  window.adminConnection = { status: vi.fn().mockResolvedValue({ mode: 'remote-sandbox', state: 'connected', message: 'Connected' }), confirmProduction: vi.fn(), retry: vi.fn() }
   window.adminOperations = {
     read: vi.fn().mockResolvedValue({}),
     execute: vi.fn().mockResolvedValue({ refundId: 91, status: 'PROCESSING', amount: '23.98', currency: 'GBP', provider: 'STRIPE' }),
@@ -555,7 +555,7 @@ it.each([
   ['missing connection API', 'no-api'],
 ] as const)('blocks a LIVE refund when the connection mode is unverified (%s) and never submits', async (_label, status) => {
   const dialog = await openRefundWith('LIVE', status)
-  expect(await within(dialog).findByText('LIVE Stripe requires a verified direct Admin connection. New refund submission is blocked.')).toBeInTheDocument()
+  expect(await within(dialog).findByText('LIVE Stripe requires a verified Production or direct Admin connection. New refund submission is blocked.')).toBeInTheDocument()
   expect(within(dialog).getByLabelText('Refund amount (GBP)')).toBeDisabled()
   expect(within(dialog).getByRole('button', { name: 'Continue' })).toBeDisabled()
   expect(window.adminOperations.execute).not.toHaveBeenCalled()
@@ -568,7 +568,7 @@ it('re-validates the connection mode at Continue: LIVE with a mode that became m
   fireEvent.change(within(dialog).getByLabelText('Reason'), { target: { value: 'GOODWILL' } })
   status = { mode: 'direct-ish', state: 'connected', message: 'Direct' }
   fireEvent.click(within(dialog).getByRole('button', { name: 'Continue' }))
-  expect(await within(dialog).findAllByText(/verified direct Admin connection/)).not.toHaveLength(0)
+  expect(await within(dialog).findAllByText(/verified Production or direct Admin connection/)).not.toHaveLength(0)
   expect(within(dialog).queryByRole('button', { name: 'Refund £1.00 GBP' })).toBeNull()
   expect(window.adminOperations.execute).not.toHaveBeenCalled()
 })
@@ -641,7 +641,7 @@ it.each([
   ['missing message', { mode: 'direct', state: 'connected' }],
 ] as const)('blocks a LIVE refund when the direct connection is %s and never submits', async (_label, status) => {
   const dialog = await openRefundWith('LIVE', status)
-  expect(await within(dialog).findByText('LIVE Stripe requires a verified direct Admin connection. New refund submission is blocked.')).toBeInTheDocument()
+  expect(await within(dialog).findByText('LIVE Stripe requires a verified Production or direct Admin connection. New refund submission is blocked.')).toBeInTheDocument()
   expect(within(dialog).getByRole('button', { name: 'Continue' })).toBeDisabled()
   expect(window.adminOperations.execute).not.toHaveBeenCalled()
 })

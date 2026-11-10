@@ -145,7 +145,7 @@ function App() {
     }).catch(() => {
       if (!active) return
       setBootstrapAvailable(false)
-      setBootstrapError('Administrator setup status is unavailable. Check the Sandbox connection and owner access.')
+      setBootstrapError('Administrator setup status is unavailable. Check the Backend connection and owner access.')
     })
     return () => { active = false }
   }, [connectionReady])

@@ -40,7 +40,9 @@
     "test:contracts": "node scripts/verify-shared-contract.mjs",
     "dev:sandbox": "cross-env COLORFUL_LIFE_CONNECTION_MODE=remote-sandbox npm run dev",
     "electron:sandbox": "run-s build electron:sandbox:launch",
-    "electron:sandbox:launch": "cross-env COLORFUL_LIFE_CONNECTION_MODE=remote-sandbox electron ."
+    "electron:sandbox:launch": "cross-env COLORFUL_LIFE_CONNECTION_MODE=remote-sandbox electron .",
+    "electron:production": "run-s build electron:production:launch",
+    "electron:production:launch": "cross-env COLORFUL_LIFE_CONNECTION_MODE=remote-production electron ."
   },
   "dependencies": {
     "react": "^19.2.8",
