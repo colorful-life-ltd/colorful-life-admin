@@ -52,12 +52,17 @@ export class ConnectionManager {
   private monitor?: ReturnType<typeof setTimeout>
   private retrying?: Promise<ConnectionStatus>
   private stopped = false
+  /** Production waits for an explicit owner selection in the window; other modes need none. */
+  private confirmed: boolean
   private readonly deps: ConnectionDependencies
   private readonly config: ConnectionConfig
   constructor(config: ConnectionConfig, dependencies: Partial<ConnectionDependencies> = {}) {
     this.config = config
     this.deps = { ...defaults, ...dependencies }
-    this.view = { mode: config.mode, state: config.mode === 'direct' ? 'connected' : 'connecting', message: config.mode === 'direct' ? 'Direct Backend connection configured.' : 'Connecting securely to the Backend…' }
+    this.confirmed = config.mode !== 'remote-production'
+    this.view = !this.confirmed
+      ? { mode: config.mode, state: 'awaiting-confirmation', message: 'Confirm the Production connection to continue.' }
+      : { mode: config.mode, state: config.mode === 'direct' ? 'connected' : 'connecting', message: config.mode === 'direct' ? 'Direct Backend connection configured.' : 'Connecting securely to the Backend…' }
     this.deps.log(`[Admin connection] ${describeConnection(config)}`)
   }
   status(): ConnectionStatus { return { ...this.view, description: describeConnection(this.config) } }
@@ -76,6 +81,7 @@ export class ConnectionManager {
   }
   start(): Promise<void> {
     if (this.stopped) return Promise.reject(new Error('Admin is closing.'))
+    if (!this.confirmed) return Promise.reject(new Error(this.view.message))
     if (this.config.mode === 'direct' || this.view.state === 'connected') return Promise.resolve()
     if (this.attempt) return this.attempt
     if (this.view.state === 'failed') return Promise.reject(new Error(this.view.message))
@@ -148,7 +154,17 @@ export class ConnectionManager {
     await this.start()
     if (this.stopped || this.view.state !== 'connected') throw new Error(this.view.message)
   }
+  /** The only way a remote-production manager starts its tunnel. The mode never changes afterwards. */
+  confirmProduction(): Promise<ConnectionStatus> {
+    if (this.config.mode !== 'remote-production' || this.confirmed || this.stopped) return Promise.resolve(this.status())
+    this.confirmed = true
+    this.deps.log('[Admin connection] Production connection confirmed by the owner')
+    this.view = { mode: this.config.mode, state: 'connecting', message: 'Connecting securely to the Backend…' }
+    void this.start().catch(() => undefined)
+    return Promise.resolve(this.status())
+  }
   retry(): Promise<ConnectionStatus> {
+    if (!this.confirmed) return Promise.resolve(this.status())
     if (this.retrying) return this.retrying
     return this.retrying = this.retryOnce().finally(() => { this.retrying = undefined })
   }

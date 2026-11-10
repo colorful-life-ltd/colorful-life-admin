@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { adminReturns } from './admin-api'
 import RefundModal from './RefundModal'
-import { parseConnectionMode } from './refund-ux'
+import { parseConnectionMode, type ConnectionMode } from './refund-ux'
 import { financialHundredths, formatFinancialAmount, refundOutcomeUncertain } from '../electron/order-financials'
 import type { OrderFinancials } from '../electron/order-financials'
 import type { OrderDetail } from '../electron/order-contract'
@@ -46,7 +46,7 @@ export default function Returns({
     [financials, setFinancials] = useState<OrderFinancials | null>(null),
     [orderDetail, setOrderDetail] = useState<OrderDetail | null>(null),
     [paymentEnvironment, setPaymentEnvironment] = useState<PaymentEnvironment | null>(null),
-    [connectionMode, setConnectionMode] = useState<'direct' | 'remote-sandbox' | null>(null),
+    [connectionMode, setConnectionMode] = useState<ConnectionMode | null>(null),
     [refundModalOpen, setRefundModalOpen] = useState(false),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(''),

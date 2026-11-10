@@ -47,7 +47,7 @@ describe('App authentication flow', () => {
     window.adminAuth.restore=vi.fn().mockResolvedValue(adminSession)
     window.adminReturns={list:vi.fn().mockResolvedValue(returnQueue),get:vi.fn().mockResolvedValue(returnCase),action:vi.fn()}
     window.adminOrders={list:vi.fn().mockResolvedValue(orderPage),get:vi.fn().mockResolvedValue(order),financials:vi.fn().mockResolvedValue(financials),paymentEnvironment:vi.fn().mockResolvedValue({stripeEnvironment:'TEST',refundReconciliationEnabled:true}),preparing:vi.fn(),dispatch:vi.fn(),delivered:vi.fn(),cancel:vi.fn()}
-    window.adminConnection={status:vi.fn().mockResolvedValue({mode:'direct',state:'connected',message:'Direct connection'}),retry:vi.fn()}
+    window.adminConnection={status:vi.fn().mockResolvedValue({mode:'direct',state:'connected',message:'Direct connection'}),confirmProduction: vi.fn(), retry:vi.fn()}
     render(<App />)
     const nav = await screen.findByRole('navigation', { name: 'Admin sections' })
     expect(within(nav).getAllByRole('group').map(g => g.getAttribute('aria-label'))).toEqual(['Daily operations', 'Catalogue', 'Stock'])
@@ -62,7 +62,7 @@ describe('App authentication flow', () => {
     window.adminAuth.restore=vi.fn().mockResolvedValue(adminSession)
     window.adminReturns={list:vi.fn().mockResolvedValue(returnQueue),get:vi.fn().mockResolvedValue(returnCase),action:vi.fn()}
     window.adminOrders={list:vi.fn().mockResolvedValue(orderPage),get:vi.fn().mockResolvedValue(order),financials:vi.fn().mockResolvedValue(financials),paymentEnvironment:vi.fn().mockResolvedValue({stripeEnvironment:'TEST',refundReconciliationEnabled:true}),preparing:vi.fn(),dispatch:vi.fn(),delivered:vi.fn(),cancel:vi.fn()}
-    window.adminConnection={status:vi.fn().mockResolvedValue({mode:'direct',state:'connected',message:'Direct connection'}),retry:vi.fn()}
+    window.adminConnection={status:vi.fn().mockResolvedValue({mode:'direct',state:'connected',message:'Direct connection'}),confirmProduction: vi.fn(), retry:vi.fn()}
     render(<App />)
     fireEvent.click(await screen.findByRole('button',{name:'Returns'}))
     fireEvent.click(await screen.findByRole('button',{name:/BB-R-41/}))

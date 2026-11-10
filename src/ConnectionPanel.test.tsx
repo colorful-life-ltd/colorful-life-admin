@@ -7,7 +7,7 @@ const description = 'mode=remote-sandbox target=http://localhost:3000 -> SSM i-0
 
 it('shows a compact failure with Retry, then no banner once the connection is healthy', async () => {
   const ready = vi.fn()
-  window.adminConnection = { status: vi.fn().mockResolvedValue({ mode:'remote-sandbox',state:'failed',message:'AWS credentials expired.',description }), retry: vi.fn().mockResolvedValue({ mode:'remote-sandbox',state:'connected',message:'Secure Backend connection is ready.',description }) }
+  window.adminConnection = { status: vi.fn().mockResolvedValue({ mode:'remote-sandbox',state:'failed',message:'AWS credentials expired.',description }), confirmProduction: vi.fn(), retry: vi.fn().mockResolvedValue({ mode:'remote-sandbox',state:'connected',message:'Secure Backend connection is ready.',description }) }
   render(<ConnectionPanel onReady={ready} />)
   expect(screen.getByRole('status')).toHaveTextContent('Connecting to the Backend…')
   expect(await screen.findByRole('alert')).toHaveTextContent('Connection Failed. AWS credentials expired.')
@@ -24,7 +24,7 @@ it('shows a compact failure with Retry, then no banner once the connection is he
 it('renders nothing for a healthy tunnel or direct connection and never shows technical identifiers', async () => {
   for (const mode of ['remote-sandbox', 'direct'] as const) {
     const ready = vi.fn()
-    window.adminConnection = { status: vi.fn().mockResolvedValue({ mode,state:'connected',message:'Secure Backend connection is ready.',description }), retry: vi.fn() }
+    window.adminConnection = { status: vi.fn().mockResolvedValue({ mode,state:'connected',message:'Secure Backend connection is ready.',description }), confirmProduction: vi.fn(), retry: vi.fn() }
     const { unmount } = render(<ConnectionPanel onReady={ready} />)
     await waitFor(() => expect(ready).toHaveBeenCalledWith(true))
     expect(screen.queryByLabelText('Backend connection')).not.toBeInTheDocument()
@@ -36,7 +36,7 @@ it('renders nothing for a healthy tunnel or direct connection and never shows te
 it('surfaces a later disconnect as a compact actionable failure', async () => {
   const ready = vi.fn()
   const status = vi.fn().mockResolvedValue({ mode:'remote-sandbox',state:'connected',message:'Secure Backend connection is ready.',description })
-  window.adminConnection = { status, retry: vi.fn() }
+  window.adminConnection = { status, confirmProduction: vi.fn(), retry: vi.fn() }
   render(<ConnectionPanel onReady={ready} />)
   await waitFor(() => expect(ready).toHaveBeenCalledWith(true))
   status.mockResolvedValue({ mode:'remote-sandbox',state:'failed',message:'The Backend connection was lost. Retry Connection to reconnect.',description })

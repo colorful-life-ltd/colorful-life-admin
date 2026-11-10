@@ -134,5 +134,6 @@ contextBridge.exposeInMainWorld('adminReturns',adminReturns)
 const adminConnection: import('./connection-contract.js').AdminConnectionApi = {
   status: () => forwardIpcResult(ipcRenderer.invoke('admin-connection:status')),
   retry: () => forwardIpcResult(ipcRenderer.invoke('admin-connection:retry')),
+  confirmProduction: () => forwardIpcResult(ipcRenderer.invoke('admin-connection:confirm-production')),
 }
 contextBridge.exposeInMainWorld('adminConnection', adminConnection)

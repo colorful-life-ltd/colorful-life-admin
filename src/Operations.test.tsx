@@ -142,7 +142,7 @@ it.each([
  prepareRefundWorkflow('LIVE')
  vi.mocked(window.adminConnection!.status).mockResolvedValue(status as never)
  fireEvent.click(screen.getByRole('button',{name:'Initiate refund'}))
- await waitFor(()=>expect(screen.getByRole('alert')).toHaveTextContent(/verified direct Admin connection/))
+ await waitFor(()=>expect(screen.getByRole('alert')).toHaveTextContent(/verified Production or direct Admin connection/))
  expect(api.execute).not.toHaveBeenCalled()
 })
 it.each([
@@ -152,6 +152,6 @@ it.each([
  prepareRefundWorkflow('LIVE')
  vi.mocked(window.adminConnection!.status).mockResolvedValue(status as never)
  fireEvent.click(screen.getByRole('button',{name:'Initiate refund'}))
- await waitFor(()=>expect(screen.getByRole('alert')).toHaveTextContent(/verified direct Admin connection/))
+ await waitFor(()=>expect(screen.getByRole('alert')).toHaveTextContent(/verified Production or direct Admin connection/))
  expect(api.execute).not.toHaveBeenCalled()
 })
