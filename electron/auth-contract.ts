@@ -12,6 +12,8 @@ export interface LoginCredentials {
 }
 
 export interface BootstrapStatus { registrationAvailable: boolean }
+/** Production's private first-Admin setup creates a verified account; elsewhere the email must be verified first. */
+export interface FirstAdminRegistration { verificationRequired: boolean }
 
 export interface AdminSessionView {
   user: AdminUser
@@ -25,7 +27,7 @@ export interface AdminSessionEndedNotice {
 
 export interface AdminAuthApi {
   bootstrapStatus(): Promise<BootstrapStatus>
-  registerFirstAdmin(credentials: LoginCredentials): Promise<void>
+  registerFirstAdmin(credentials: LoginCredentials): Promise<FirstAdminRegistration>
   requestPasswordReset(email: string): Promise<void>
   login(credentials: LoginCredentials): Promise<AdminSessionView>
   restore(): Promise<AdminSessionView | null>

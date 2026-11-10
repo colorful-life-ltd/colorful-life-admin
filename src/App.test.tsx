@@ -91,7 +91,7 @@ describe('App authentication flow', () => {
 
   it('offers first Admin registration only when Backend reports setup available and requires email verification before login', async () => {
     window.adminAuth.bootstrapStatus = vi.fn().mockResolvedValue({ registrationAvailable: true })
-    window.adminAuth.registerFirstAdmin = vi.fn().mockResolvedValue(undefined)
+    window.adminAuth.registerFirstAdmin = vi.fn().mockResolvedValue({ verificationRequired: true })
     render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: 'Register Administrator' }))
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.test' } })
@@ -101,6 +101,22 @@ describe('App authentication flow', () => {
     await waitFor(() => expect(window.adminAuth.registerFirstAdmin).toHaveBeenCalledWith({ email: 'owner@example.test', password: 'StrongPass1!' }))
     expect(await screen.findByText(/Administrator registered\. Check your email and verify/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Register Administrator' })).not.toBeInTheDocument()
+    expect(window.adminAuth.login).not.toHaveBeenCalled()
+  })
+
+  it('directs the owner straight to sign in when the Backend created a verified first Administrator', async () => {
+    window.adminAuth.bootstrapStatus = vi.fn().mockResolvedValue({ registrationAvailable: true })
+    window.adminAuth.registerFirstAdmin = vi.fn().mockResolvedValue({ verificationRequired: false })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Register Administrator' }))
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.test' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'StrongPass1!' } })
+    fireEvent.change(screen.getByLabelText('Confirm password'), { target: { value: 'StrongPass1!' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Register Administrator' }))
+    expect(await screen.findByText('Administrator registered. Sign in with your new email and password.')).toBeInTheDocument()
+    expect(screen.queryByText(/verify the account/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Register Administrator' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument()
     expect(window.adminAuth.login).not.toHaveBeenCalled()
   })
 

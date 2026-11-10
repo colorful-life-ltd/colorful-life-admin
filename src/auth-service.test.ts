@@ -34,6 +34,16 @@ describe('AuthService renewable session lifecycle', () => {
     expect(fetcher).toHaveBeenNthCalledWith(2, 'https://sandbox.test/api/admin/bootstrap/register', expect.objectContaining({ headers: expect.objectContaining({ 'X-Admin-Bootstrap-Authorization': authorization }) }))
   })
 
+  it('reports whether the new Administrator must verify the email, defaulting to verification', async () => {
+    const register = async (body: unknown) => new AuthService('http://localhost:3002', vi.fn()
+      .mockResolvedValueOnce(response({ authorization: 'x'.repeat(43), expiresInSeconds: 300 }))
+      .mockResolvedValueOnce(response(body, 201))).registerFirstAdmin({ email: 'owner@example.test', password: 'StrongPass1!' })
+    await expect(register({ registered: true, verificationRequired: false })).resolves.toEqual({ verificationRequired: false })
+    await expect(register({ registered: true, verificationRequired: true })).resolves.toEqual({ verificationRequired: true })
+    await expect(register({ registered: true })).resolves.toEqual({ verificationRequired: true })
+    await expect(register({ registered: true, verificationRequired: 'false' })).resolves.toEqual({ verificationRequired: true })
+  })
+
   it('stores the complete login contract in main and exposes only user plus access expiry', async () => {
     const fetcher = vi.fn()
     loginCalls(fetcher)
