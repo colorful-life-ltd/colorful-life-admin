@@ -180,10 +180,12 @@ function App() {
     if (password !== confirmPassword) { setError('Passwords do not match.'); return }
     setError(''); setIsSubmitting(true)
     try {
-      await adminAuth.registerFirstAdmin({ email, password })
+      const registration = await adminAuth.registerFirstAdmin({ email, password })
       setBootstrapAvailable(false); setRegistrationOpen(false); setConfirmPassword('')
       setPassword('')
-      setRecoveryMessage('Administrator registered. Check your email and verify the account before signing in.')
+      setRecoveryMessage(registration?.verificationRequired === false
+        ? 'Administrator registered. Sign in with your new email and password.'
+        : 'Administrator registered. Check your email and verify the account before signing in.')
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : 'Administrator registration failed.')
       if (isAdminIpcError(submissionError) && submissionError.code === 'forbidden') setBootstrapAvailable(false)

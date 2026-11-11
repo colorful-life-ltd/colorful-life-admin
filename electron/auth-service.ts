@@ -1,4 +1,4 @@
-import type { AdminSessionEndedNotice, AdminSessionView, AdminUser, BootstrapStatus, LoginCredentials } from './auth-contract.js'
+import type { AdminSessionEndedNotice, AdminSessionView, AdminUser, BootstrapStatus, FirstAdminRegistration, LoginCredentials } from './auth-contract.js'
 import { readBackendError } from './backend-error.js'
 
 export type Fetcher = (input: string, init?: RequestInit) => Promise<Response>
@@ -188,7 +188,7 @@ export class AuthService {
     return { registrationAvailable: body.registrationAvailable }
   }
 
-  async registerFirstAdmin(credentials: LoginCredentials): Promise<void> {
+  async registerFirstAdmin(credentials: LoginCredentials): Promise<FirstAdminRegistration> {
     let authorizationResponse: Response
     try { authorizationResponse = await this.fetcher(`${this.backendUrl}/admin/bootstrap/authorization`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }) }
     catch { throw new AuthError('network', 'Unable to reach the Colorful Life service.') }
@@ -209,6 +209,9 @@ export class AuthService {
       if (response.status === 400) throw new AuthError('validation', 'Enter a valid email and a strong password.', details.code, response.status)
       throw new AuthError('server', details.message, details.code, response.status)
     }
+    // Only an explicit `false` skips email verification; any other or missing value keeps the verification step.
+    const body = await parseJson(response)
+    return { verificationRequired: !(isRecord(body) && body.verificationRequired === false) }
   }
 
   async requestPasswordReset(email: string): Promise<void> {
